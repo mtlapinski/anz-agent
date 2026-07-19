@@ -72,6 +72,11 @@ def test_chat_tool_call_then_text():
     assert mock_client.messages.create.call_count == 2
     # history: user, assistant (tool call), user (tool result), assistant (text)
     assert len(history) == 4
+    tool_result_msg = history[2]
+    assert tool_result_msg["role"] == "user"
+    assert tool_result_msg["content"][0]["type"] == "tool_result"
+    assert tool_result_msg["content"][0]["tool_use_id"] == "tu_123"
+    assert isinstance(tool_result_msg["content"][0]["content"], str)
 
 
 def test_chat_passes_system_prompt():

@@ -78,9 +78,16 @@ def chat(client: anthropic.Anthropic, history: list, user_message: str) -> str:
                         "tool_use_id": block.id,
                         "content": result,
                     })
-            history.append({"role": "assistant", "content": response.content})
+            history.append({"role": "assistant", "content": [
+                {"type": "tool_use", "id": b.id, "name": b.name, "input": b.input}
+                for b in response.content if b.type == "tool_use"
+            ]})
             history.append({"role": "user", "content": tool_results})
         else:
-            text = next(b.text for b in response.content if hasattr(b, "text"))
-            history.append({"role": "assistant", "content": response.content})
+            if response.stop_reason not in ("end_turn", "stop_sequence"):
+                raise RuntimeError(f"Unexpected stop_reason: {response.stop_reason!r}")
+            text = next((b.text for b in response.content if hasattr(b, "text")), "")
+            history.append({"role": "assistant", "content": [
+                {"type": "text", "text": text}
+            ]})
             return text
