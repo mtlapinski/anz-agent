@@ -107,6 +107,8 @@ def chat(client: anthropic.Anthropic, history: list, user_message: str) -> str:
             messages=history,
         )
 
+        print(f"[tokens: {response.usage.input_tokens} in / {response.usage.output_tokens} out]")
+
         try:
             if generation:
                 generation.end(
