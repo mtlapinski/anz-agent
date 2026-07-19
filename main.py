@@ -30,7 +30,7 @@ def main() -> None:
 
     while True:
         try:
-            user_input = input("You: ").strip()
+            user_input = input("What can I help you find? : ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nGoodbye!")
             break
