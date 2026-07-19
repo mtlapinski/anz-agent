@@ -1,5 +1,7 @@
 import json
+import os
 import anthropic
+from langfuse import Langfuse
 from tools.amazon import search_amazon
 
 SYSTEM_PROMPT = """You are a helpful Amazon shopping assistant. Your job is to help the user find the right product at the right price.
@@ -48,18 +50,43 @@ TOOLS = [
     }
 ]
 
+_langfuse: Langfuse | None = None
 
-def run_tool(tool_name: str, tool_input: dict) -> str:
+
+def _get_langfuse() -> Langfuse:
+    global _langfuse
+    if _langfuse is None:
+        _langfuse = Langfuse(
+            public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
+            secret_key=os.environ["LANGFUSE_SECRET_KEY"],
+            host=os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com"),
+        )
+    return _langfuse
+
+
+def run_tool(tool_name: str, tool_input: dict, trace=None) -> str:
     if tool_name == "search_amazon":
+        span = trace.span(name="search_amazon", input=tool_input) if trace else None
         result = search_amazon(**tool_input)
+        if span:
+            span.end(output=result)
         return json.dumps(result)
     raise ValueError(f"Unknown tool: {tool_name}")
 
 
 def chat(client: anthropic.Anthropic, history: list, user_message: str) -> str:
+    lf = _get_langfuse()
+    trace = lf.trace(name="shopping-turn", input={"message": user_message})
+
     history.append({"role": "user", "content": user_message})
 
     while True:
+        generation = trace.generation(
+            name="claude",
+            model="claude-sonnet-4-6",
+            input={"system": SYSTEM_PROMPT, "messages": history},
+        )
+
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=2048,
@@ -68,11 +95,19 @@ def chat(client: anthropic.Anthropic, history: list, user_message: str) -> str:
             messages=history,
         )
 
+        generation.end(
+            output=str(response.content),
+            usage={
+                "input": response.usage.input_tokens,
+                "output": response.usage.output_tokens,
+            },
+        )
+
         if response.stop_reason == "tool_use":
             tool_results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    result = run_tool(block.name, block.input)
+                    result = run_tool(block.name, block.input, trace=trace)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
@@ -87,7 +122,6 @@ def chat(client: anthropic.Anthropic, history: list, user_message: str) -> str:
             if response.stop_reason not in ("end_turn", "stop_sequence"):
                 raise RuntimeError(f"Unexpected stop_reason: {response.stop_reason!r}")
             text = next((b.text for b in response.content if hasattr(b, "text")), "")
-            history.append({"role": "assistant", "content": [
-                {"type": "text", "text": text}
-            ]})
+            history.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
+            trace.update(output={"response": text})
             return text
