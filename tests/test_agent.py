@@ -91,7 +91,7 @@ def test_chat_passes_system_prompt(mock_lf):
 
     call_kwargs = mock_client.messages.create.call_args.kwargs
     assert call_kwargs["system"] == SYSTEM_PROMPT
-    assert call_kwargs["model"] == "claude-sonnet-4-6"
+    assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
 
 
 @patch("agent._get_langfuse")

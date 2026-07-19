@@ -93,14 +93,14 @@ def chat(client: anthropic.Anthropic, history: list, user_message: str) -> str:
         try:
             generation = trace.generation(
                 name="claude",
-                model="claude-sonnet-4-6",
+                model="claude-haiku-4-5-20251001",
                 input={"system": SYSTEM_PROMPT, "messages": history},
             ) if trace else None
         except Exception:
             generation = None
 
         response = client.messages.create(
-            model="claude-sonnet-4-6",
+            model="claude-haiku-4-5-20251001",
             max_tokens=2048,
             system=SYSTEM_PROMPT,
             tools=TOOLS,
