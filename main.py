@@ -47,6 +47,9 @@ def main() -> None:
         try:
             response = chat(client, history, user_input)
             print(f"\nAssistant: {response}\n")
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
         except Exception as e:
             print(f"\nError: {e}. Please try again.\n")
 
