@@ -1,6 +1,6 @@
 import os
 from typing import Optional
-from amazon_paapi import AmazonApi
+from serpapi import GoogleSearch
 
 
 def search_amazon(
@@ -10,67 +10,54 @@ def search_amazon(
     max_price: Optional[float] = None,
 ) -> dict:
     """
-    Search Amazon for products. optimize_for is passed through from the agent
-    and used by the caller to rank results — it is not applied here.
+    Search Amazon via SerpAPI. optimize_for is passed through from the agent
+    and used by the caller to rank results — not applied here.
     """
-    amazon = AmazonApi(
-        key=os.environ["AMAZON_ACCESS_KEY"],
-        secret=os.environ["AMAZON_SECRET_KEY"],
-        tag=os.environ["AMAZON_PARTNER_TAG"],
-        country="US",
-    )
+    params = {
+        "engine": "amazon",
+        "k": query,
+        "amazon_domain": "amazon.com",
+        "api_key": os.environ["SERPAPI_KEY"],
+    }
 
     try:
-        items = amazon.search_items(keywords=query, item_count=max_results * 2)
+        results = GoogleSearch(params).get_dict()
     except Exception as e:
         return {"error": str(e), "products": []}
 
+    if "error" in results:
+        return {"error": results["error"], "products": []}
+
     products = []
-    for item in (items or []):
-        try:
-            price = item.offers.listings[0].price.amount
-        except (AttributeError, IndexError):
-            price = None
+    for item in (results.get("organic_results") or []):
+        title = item.get("title")
+        if not title:
+            continue
+
+        price = item.get("extracted_price")
 
         if max_price is not None and (price is None or price > max_price):
             continue
 
-        try:
-            currency = item.offers.listings[0].price.currency
-        except (AttributeError, IndexError):
-            currency = "USD"
-
-        try:
-            rating = item.customer_reviews.star_rating.value
-        except AttributeError:
-            rating = None
-
-        try:
-            review_count = item.customer_reviews.count.display_value
-        except AttributeError:
-            review_count = 0
-
-        try:
-            prime = item.offers.listings[0].delivery_info.is_prime_eligible
-        except (AttributeError, IndexError):
-            prime = False
-
-        try:
-            title = item.item_info.title.display_value
-        except AttributeError:
-            continue  # skip items with no title
-
         products.append({
             "title": title,
             "price": price,
-            "currency": currency,
-            "rating": rating,
-            "review_count": review_count,
-            "prime": prime,
-            "url": getattr(item, "detail_page_url", None),
+            "currency": "USD",
+            "rating": item.get("rating"),
+            "review_count": item.get("reviews"),
+            "prime": _has_free_delivery(item.get("delivery")),
+            "url": item.get("link"),
         })
 
         if len(products) >= max_results:
             break
 
     return {"products": products}
+
+
+def _has_free_delivery(delivery) -> bool:
+    if not delivery:
+        return False
+    if isinstance(delivery, list):
+        return any("free" in str(d).lower() for d in delivery)
+    return "free" in str(delivery).lower()
