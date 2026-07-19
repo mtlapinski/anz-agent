@@ -89,8 +89,9 @@ Claude receives the list and narrates the top picks based on the optimization go
 
 Langfuse wraps all API calls:
 - Each conversation turn is a Langfuse trace
-- Anthropic SDK call is a span within the trace
-- Amazon PA API call is a separate span
+- Anthropic SDK call is a generation span within the trace, including input and output token counts
+- SerpAPI call is a separate span within the trace
+- Token usage (input tokens, output tokens) is logged per LLM call and surfaced in the Langfuse UI
 
 Use the free Langfuse cloud tier or run locally via `docker compose up`.
 

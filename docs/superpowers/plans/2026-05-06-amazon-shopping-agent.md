@@ -643,7 +643,7 @@ git commit -m "feat: add CLI entry point"
 **Files:**
 - Modify: `agent.py`
 
-Add Langfuse tracing so each conversation turn becomes a trace, the Claude call is a generation span, and the Amazon tool call is a child span.
+Add Langfuse tracing so each conversation turn becomes a trace, the Claude call is a generation span (with input/output token counts logged), and the SerpAPI tool call is a child span.
 
 - [ ] **Step 1: Update agent.py to add Langfuse tracing**
 
@@ -765,11 +765,16 @@ def chat(client: anthropic.Anthropic, history: list, user_message: str) -> str:
                         "tool_use_id": block.id,
                         "content": result,
                     })
-            history.append({"role": "assistant", "content": response.content})
+            history.append({"role": "assistant", "content": [
+                {"type": "tool_use", "id": b.id, "name": b.name, "input": b.input}
+                for b in response.content if b.type == "tool_use"
+            ]})
             history.append({"role": "user", "content": tool_results})
         else:
-            text = next(b.text for b in response.content if hasattr(b, "text"))
-            history.append({"role": "assistant", "content": response.content})
+            if response.stop_reason not in ("end_turn", "stop_sequence"):
+                raise RuntimeError(f"Unexpected stop_reason: {response.stop_reason!r}")
+            text = next((b.text for b in response.content if hasattr(b, "text")), "")
+            history.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
             trace.update(output={"response": text})
             return text
 ```
@@ -786,10 +791,11 @@ Note: If the tests fail because `_get_langfuse()` is called during `chat()` and 
 
 - [ ] **Step 3: Smoke-test observability**
 
-Run `python main.py`, have a conversation, complete a search. Then open your Langfuse dashboard (cloud.langfuse.com or localhost) and verify:
+Run `.venv/bin/python main.py`, have a conversation, complete a search. Then open your Langfuse dashboard (cloud.langfuse.com or localhost) and verify:
 - A trace named `shopping-turn` appears for each user message
-- The trace contains a `claude` generation with token counts
+- The trace contains a `claude` generation with **input and output token counts visible**
 - When a search runs, a `search_amazon` span appears inside the trace
+- Token counts accumulate across multi-turn conversations (each Claude call logs its own usage)
 
 - [ ] **Step 4: Commit**
 
