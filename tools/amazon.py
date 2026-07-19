@@ -9,6 +9,10 @@ def search_amazon(
     max_results: int = 5,
     max_price: Optional[float] = None,
 ) -> dict:
+    """
+    Search Amazon for products. optimize_for is passed through from the agent
+    and used by the caller to rank results — it is not applied here.
+    """
     amazon = AmazonApi(
         key=os.environ["AMAZON_ACCESS_KEY"],
         secret=os.environ["AMAZON_SECRET_KEY"],
@@ -22,13 +26,13 @@ def search_amazon(
         return {"error": str(e), "products": []}
 
     products = []
-    for item in items:
+    for item in (items or []):
         try:
             price = item.offers.listings[0].price.amount
         except (AttributeError, IndexError):
             price = None
 
-        if max_price is not None and price is not None and price > max_price:
+        if max_price is not None and (price is None or price > max_price):
             continue
 
         try:
@@ -63,7 +67,7 @@ def search_amazon(
             "rating": rating,
             "review_count": review_count,
             "prime": prime,
-            "url": item.detail_page_url,
+            "url": getattr(item, "detail_page_url", None),
         })
 
         if len(products) >= max_results:

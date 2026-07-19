@@ -117,3 +117,42 @@ def test_search_respects_max_results(mock_api_class):
     result = search_amazon(query="laptop", optimize_for="price", max_results=3)
 
     assert len(result["products"]) == 3
+
+
+@patch.dict(os.environ, {
+    "AMAZON_ACCESS_KEY": "fake_key",
+    "AMAZON_SECRET_KEY": "fake_secret",
+    "AMAZON_PARTNER_TAG": "fake_tag",
+})
+@patch("tools.amazon.AmazonApi")
+def test_search_handles_none_response(mock_api_class):
+    mock_api = mock_api_class.return_value
+    mock_api.search_items.return_value = None
+
+    from tools.amazon import search_amazon
+    result = search_amazon(query="laptop", optimize_for="price", max_results=5)
+
+    assert result["products"] == []
+
+
+@patch.dict(os.environ, {
+    "AMAZON_ACCESS_KEY": "fake_key",
+    "AMAZON_SECRET_KEY": "fake_secret",
+    "AMAZON_PARTNER_TAG": "fake_tag",
+})
+@patch("tools.amazon.AmazonApi")
+def test_search_excludes_unpriced_items_when_max_price_set(mock_api_class):
+    mock_api = mock_api_class.return_value
+    priced_item = make_mock_item(title="Priced Laptop", price=199.99)
+    unpriced_item = MagicMock()
+    unpriced_item.item_info.title.display_value = "Unpriced Laptop"
+    unpriced_item.offers.listings[0].price.amount = None
+    unpriced_item.detail_page_url = "https://www.amazon.com/dp/B002TEST"
+    mock_api.search_items.return_value = [priced_item, unpriced_item]
+
+    from tools.amazon import search_amazon
+    result = search_amazon(query="laptop", optimize_for="price", max_results=5, max_price=300.0)
+
+    titles = [p["title"] for p in result["products"]]
+    assert "Priced Laptop" in titles
+    assert "Unpriced Laptop" not in titles
