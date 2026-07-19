@@ -53,6 +53,13 @@ def main() -> None:
         except Exception as e:
             print(f"\nError: {e}. Please try again.\n")
 
+    # flush Langfuse event queue so last trace is not lost on exit
+    try:
+        from agent import _get_langfuse
+        _get_langfuse().flush()
+    except Exception:
+        pass
+
 
 if __name__ == "__main__":
     main()
