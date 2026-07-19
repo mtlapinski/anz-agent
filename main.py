@@ -7,8 +7,6 @@ from agent import chat
 REQUIRED_KEYS = [
     "ANTHROPIC_API_KEY",
     "SERPAPI_KEY",
-    "LANGFUSE_PUBLIC_KEY",
-    "LANGFUSE_SECRET_KEY",
 ]
 
 
