@@ -24,70 +24,146 @@ def test_run_tool_unknown_raises():
 
 
 @patch("agent._get_langfuse")
-@patch("agent.llm")
-def test_chat_text_response_updates_history(mock_llm, mock_lf):
-    from agent import chat
-    mock_llm.complete.return_value = LLMResponse(
-        text="What are you looking for?", tool_calls=None, input_tokens=10, output_tokens=5
-    )
-    history = []
-    result = chat(MagicMock(), history, "Hello", default_config())
-    assert result == "What are you looking for?"
-    assert history[0] == {"role": "user", "content": "Hello"}
-    assert history[1]["role"] == "assistant"
+def test_run_tool_creates_langfuse_span_with_trace_id(mock_lf):
+    from agent import run_tool
+    mock_client = MagicMock(spec=["create_trace_id", "start_observation", "create_score", "flush"])
+    mock_span = MagicMock()
+    mock_client.start_observation.return_value = mock_span
+    mock_lf.return_value = mock_client
 
-
-@patch("agent._get_langfuse")
-@patch("agent.llm")
-def test_chat_tool_call_then_text(mock_llm, mock_lf):
-    from agent import chat
-    mock_llm.complete.side_effect = [
-        LLMResponse(text=None, tool_calls=[{"name": "search_amazon", "id": "tu_123",
-            "input": {"query": "laptop", "optimize_for": "price", "max_results": 5}}],
-            input_tokens=80, output_tokens=20),
-        LLMResponse(text="Here are the top laptops...", tool_calls=None, input_tokens=200, output_tokens=50),
-    ]
     with patch("agent.search_amazon") as mock_search:
         mock_search.return_value = {"products": []}
-        history = []
-        result = chat(MagicMock(), history, "Find me a laptop", default_config())
-    assert result == "Here are the top laptops..."
-    assert mock_llm.complete.call_count == 2
-    assert len(history) == 4
-    tool_result_msg = history[2]
-    assert tool_result_msg["role"] == "user"
-    assert tool_result_msg["content"][0]["type"] == "tool_result"
-    assert tool_result_msg["content"][0]["tool_use_id"] == "tu_123"
+        run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5},
+                  trace_id="trace-123")
+
+    mock_client.start_observation.assert_called_once_with(
+        trace_context={"trace_id": "trace-123"},
+        name="search_amazon",
+        as_type="tool",
+        input={"query": "laptop", "optimize_for": "price", "max_results": 5},
+    )
+    mock_span.update.assert_called_once_with(output={"products": []})
+    mock_span.end.assert_called_once()
 
 
 @patch("agent._get_langfuse")
-@patch("agent.llm")
-def test_chat_passes_system_prompt(mock_llm, mock_lf):
-    from agent import chat, SYSTEM_PROMPT
-    mock_llm.complete.return_value = LLMResponse(
-        text="hi", tool_calls=None, input_tokens=10, output_tokens=5
-    )
-    config = default_config()
-    chat(MagicMock(), [], "hi", config)
-    call_kwargs = mock_llm.complete.call_args
-    assert call_kwargs.args[2] == SYSTEM_PROMPT   # system is 3rd positional arg
+def test_run_tool_no_span_when_trace_id_none(mock_lf):
+    from agent import run_tool
+    mock_client = MagicMock(spec=["create_trace_id", "start_observation", "create_score", "flush"])
+    mock_lf.return_value = mock_client
+
+    with patch("agent.search_amazon") as mock_search:
+        mock_search.return_value = {"products": []}
+        run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5})
+
+    mock_client.start_observation.assert_not_called()
 
 
 @patch("agent._get_langfuse")
-@patch("agent.llm")
-def test_chat_logs_token_usage(mock_llm, mock_lf):
-    from agent import chat
-    mock_llm.complete.return_value = LLMResponse(
-        text="Here are results...", tool_calls=None, input_tokens=100, output_tokens=50
+def test_run_tool_continues_when_langfuse_raises(mock_lf):
+    from agent import run_tool
+    mock_lf.side_effect = Exception("langfuse down")
+
+    with patch("agent.search_amazon") as mock_search:
+        mock_search.return_value = {"products": []}
+        result = run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5},
+                            trace_id="trace-123")
+
+    assert json.loads(result) == {"products": []}
+
+
+def test_eval_score_defaults():
+    from agent import EvalScore
+    score = EvalScore(overall=4, note="good pick")
+    assert score.overall == 4
+    assert score.note == "good pick"
+    assert score.criteria is None
+
+
+@patch("agent._get_langfuse")
+def test_record_score_writes_jsonl(mock_lf, tmp_path, monkeypatch):
+    from agent import record_score, EvalScore
+    monkeypatch.chdir(tmp_path)
+    score = EvalScore(overall=4, note="good pick")
+    context = {"query": "laptop", "optimize_for": "price", "recommendation": "Here are 3 laptops..."}
+
+    record_score("trace-123", context, score)
+
+    jsonl_path = tmp_path / "evals" / "scores.jsonl"
+    assert jsonl_path.exists()
+    lines = jsonl_path.read_text().strip().split("\n")
+    assert len(lines) == 1
+    row = json.loads(lines[0])
+    assert row["query"] == "laptop"
+    assert row["optimize_for"] == "price"
+    assert row["recommendation"] == "Here are 3 laptops..."
+    assert row["overall"] == 4
+    assert row["note"] == "good pick"
+    assert "timestamp" in row
+
+
+@patch("agent._get_langfuse")
+def test_record_score_calls_langfuse_create_score(mock_lf, tmp_path, monkeypatch):
+    from agent import record_score, EvalScore
+    monkeypatch.chdir(tmp_path)
+    mock_client = MagicMock()
+    mock_lf.return_value = mock_client
+    score = EvalScore(overall=5, note=None)
+    context = {"query": "mouse", "optimize_for": "quality", "recommendation": "The X mouse..."}
+
+    record_score("trace-abc", context, score)
+
+    mock_client.create_score.assert_called_once_with(
+        trace_id="trace-abc", name="usefulness", value=5, comment=None
     )
-    mock_trace = MagicMock()
-    mock_lf.return_value.trace.return_value = mock_trace
-    mock_generation = MagicMock()
-    mock_trace.generation.return_value = mock_generation
 
-    chat(MagicMock(), [], "find me a blender", default_config())
 
-    mock_generation.end.assert_called_once()
-    call_kwargs = mock_generation.end.call_args.kwargs
-    assert call_kwargs["usage"]["input"] == 100
-    assert call_kwargs["usage"]["output"] == 50
+@patch("agent._get_langfuse")
+def test_record_score_skips_when_score_is_none(mock_lf, tmp_path, monkeypatch):
+    from agent import record_score
+    monkeypatch.chdir(tmp_path)
+    mock_client = MagicMock()
+    mock_lf.return_value = mock_client
+    context = {"query": "mouse", "optimize_for": "quality", "recommendation": "The X mouse..."}
+
+    record_score("trace-abc", context, None)
+
+    mock_client.create_score.assert_not_called()
+    assert not (tmp_path / "evals" / "scores.jsonl").exists()
+
+
+@patch("agent._get_langfuse")
+def test_record_score_skips_langfuse_when_trace_id_none(mock_lf, tmp_path, monkeypatch):
+    from agent import record_score, EvalScore
+    monkeypatch.chdir(tmp_path)
+    mock_client = MagicMock()
+    mock_lf.return_value = mock_client
+    score = EvalScore(overall=3, note=None)
+
+    record_score(None, {"query": "q", "optimize_for": "price", "recommendation": "r"}, score)
+
+    mock_client.create_score.assert_not_called()
+    assert (tmp_path / "evals" / "scores.jsonl").exists()
+
+
+@patch("agent._get_langfuse")
+def test_record_score_continues_when_langfuse_raises(mock_lf, tmp_path, monkeypatch):
+    from agent import record_score, EvalScore
+    monkeypatch.chdir(tmp_path)
+    mock_lf.side_effect = Exception("langfuse down")
+    score = EvalScore(overall=2, note=None)
+
+    record_score("trace-x", {"query": "q", "optimize_for": "price", "recommendation": "r"}, score)
+
+    assert (tmp_path / "evals" / "scores.jsonl").exists()
+
+
+@patch("agent._get_langfuse")
+def test_record_score_continues_when_jsonl_write_fails(mock_lf, tmp_path, monkeypatch):
+    from agent import record_score, EvalScore
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "evals").mkdir()
+    (tmp_path / "evals" / "scores.jsonl").mkdir()  # a directory where the file should go -> open() fails
+    score = EvalScore(overall=2, note=None)
+
+    record_score(None, {"query": "q", "optimize_for": "price", "recommendation": "r"}, score)  # should not raise

@@ -1,6 +1,8 @@
 import json
 import os
 import llm
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from langfuse import Langfuse
 from llm import ModelConfig
 from tools.amazon import search_amazon
@@ -65,77 +67,63 @@ def _get_langfuse() -> Langfuse:
     return _langfuse
 
 
-def run_tool(tool_name: str, tool_input: dict, trace=None) -> str:
+def run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None) -> str:
     if tool_name == "search_amazon":
-        try:
-            span = trace.span(name="search_amazon", input=tool_input) if trace else None
-        except Exception:
-            span = None
+        span = None
+        if trace_id:
+            try:
+                span = _get_langfuse().start_observation(
+                    trace_context={"trace_id": trace_id},
+                    name="search_amazon",
+                    as_type="tool",
+                    input=tool_input,
+                )
+            except Exception:
+                span = None
         result = search_amazon(**tool_input)
-        try:
-            if span:
-                span.end(output=result)
-        except Exception:
-            pass
+        if span:
+            try:
+                span.update(output=result)
+                span.end()
+            except Exception:
+                pass
         return json.dumps(result)
     raise ValueError(f"Unknown tool: {tool_name}")
 
 
-def chat(client, history: list, user_message: str, model_config: ModelConfig) -> str:
-    try:
-        lf = _get_langfuse()
-        trace = lf.trace(name="shopping-turn", input={"message": user_message})
-    except Exception:
-        trace = None
+@dataclass
+class EvalScore:
+    overall: int | None
+    note: str | None
+    criteria: dict[str, int] | None = None
 
-    history.append({"role": "user", "content": user_message})
 
-    while True:
+def record_score(trace_id: str | None, context: dict, score: "EvalScore | None") -> None:
+    if score is None:
+        return
+
+    if trace_id:
         try:
-            generation = trace.generation(
-                name="llm",
-                model=f"{model_config.provider}/{model_config.model}",
-                input={"system": SYSTEM_PROMPT, "messages": history},
-            ) if trace else None
-        except Exception:
-            generation = None
-
-        llm_response = llm.complete(client, model_config, SYSTEM_PROMPT, TOOLS, history)
-
-        print(f"[tokens: {llm_response.input_tokens} in / {llm_response.output_tokens} out]")
-
-        try:
-            if generation:
-                generation.end(
-                    output=str(llm_response.text or llm_response.tool_calls),
-                    usage={
-                        "input": llm_response.input_tokens,
-                        "output": llm_response.output_tokens,
-                    },
-                )
+            _get_langfuse().create_score(
+                trace_id=trace_id,
+                name="usefulness",
+                value=score.overall,
+                comment=score.note,
+            )
         except Exception:
             pass
 
-        if llm_response.tool_calls:
-            tool_results = []
-            for tc in llm_response.tool_calls:
-                result = run_tool(tc["name"], tc["input"], trace=trace)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc["id"],
-                    "content": result,
-                })
-            history.append({"role": "assistant", "content": [
-                {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["input"]}
-                for tc in llm_response.tool_calls
-            ]})
-            history.append({"role": "user", "content": tool_results})
-        else:
-            text = llm_response.text or ""
-            history.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
-            try:
-                if trace:
-                    trace.update(output={"response": text})
-            except Exception:
-                pass
-            return text
+    try:
+        os.makedirs("evals", exist_ok=True)
+        row = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "query": context.get("query", ""),
+            "optimize_for": context.get("optimize_for", ""),
+            "recommendation": context.get("recommendation", ""),
+            "overall": score.overall,
+            "note": score.note,
+        }
+        with open("evals/scores.jsonl", "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception as e:
+        print(f"Warning: failed to write eval score: {e}")
