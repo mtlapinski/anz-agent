@@ -90,3 +90,99 @@ def test_complete_anthropic_unexpected_stop_reason_raises():
 
     with pytest.raises(RuntimeError, match="Unexpected stop_reason"):
         complete(mock_client, config, "system", [], [{"role": "user", "content": "hi"}])
+
+
+def make_google_text_response(text="Here are results"):
+    part = MagicMock()
+    part.text = text
+    del part.function_call  # ensure hasattr check fails
+    candidate = MagicMock()
+    candidate.content.parts = [part]
+    response = MagicMock()
+    response.candidates = [candidate]
+    response.usage_metadata.prompt_token_count = 200
+    response.usage_metadata.candidates_token_count = 60
+    return response
+
+
+def make_google_tool_response(name="search_amazon", args=None):
+    if args is None:
+        args = {"query": "blender", "optimize_for": "price", "max_results": 5}
+    fc = MagicMock()
+    fc.name = name
+    fc.args = args
+    part = MagicMock()
+    part.function_call = fc
+    candidate = MagicMock()
+    candidate.content.parts = [part]
+    response = MagicMock()
+    response.candidates = [candidate]
+    response.usage_metadata.prompt_token_count = 150
+    response.usage_metadata.candidates_token_count = 30
+    return response
+
+
+def test_complete_google_text_response():
+    config = ModelConfig(provider="google", model="gemini-2.0-flash-lite")
+
+    mock_model = MagicMock()
+    mock_model.generate_content.return_value = make_google_text_response("Great choice!")
+
+    with patch("llm.genai") as mock_genai:
+        mock_genai.GenerativeModel.return_value = mock_model
+        result = complete(None, config, "system", [], [{"role": "user", "content": "hi"}])
+
+    assert result.text == "Great choice!"
+    assert result.tool_calls is None
+    assert result.input_tokens == 200
+    assert result.output_tokens == 60
+
+
+def test_complete_google_tool_response():
+    config = ModelConfig(provider="google", model="gemini-2.0-flash-lite")
+
+    mock_model = MagicMock()
+    mock_model.generate_content.return_value = make_google_tool_response()
+
+    with patch("llm.genai") as mock_genai:
+        mock_genai.GenerativeModel.return_value = mock_model
+        result = complete(None, config, "system", [], [{"role": "user", "content": "find blender"}])
+
+    assert result.text is None
+    assert result.tool_calls is not None
+    assert result.tool_calls[0]["name"] == "search_amazon"
+    assert result.tool_calls[0]["input"] == {"query": "blender", "optimize_for": "price", "max_results": 5}
+    assert result.input_tokens == 150
+    assert result.output_tokens == 30
+
+
+def test_anthropic_tools_to_google():
+    from llm import _anthropic_tools_to_google
+    anthropic_tools = [{
+        "name": "search_amazon",
+        "description": "Search Amazon",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    }]
+    result = _anthropic_tools_to_google(anthropic_tools)
+    assert len(result) == 1
+    decl = result[0]["function_declarations"][0]
+    assert decl["name"] == "search_amazon"
+    assert decl["description"] == "Search Amazon"
+    assert decl["parameters"]["properties"]["query"]["type"] == "string"
+
+
+def test_anthropic_messages_to_google_plain_text():
+    from llm import _anthropic_messages_to_google
+    messages = [
+        {"role": "user", "content": "Find me a blender"},
+        {"role": "assistant", "content": [{"type": "text", "text": "What's your budget?"}]},
+        {"role": "user", "content": "Under $50"},
+    ]
+    result = _anthropic_messages_to_google(messages)
+    assert result[0] == {"role": "user", "parts": [{"text": "Find me a blender"}]}
+    assert result[1] == {"role": "model", "parts": [{"text": "What's your budget?"}]}
+    assert result[2] == {"role": "user", "parts": [{"text": "Under $50"}]}
