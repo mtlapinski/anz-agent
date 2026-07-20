@@ -5,6 +5,7 @@ from typing import Annotated, Any, TypedDict
 import agent
 import llm
 from agent import SYSTEM_PROMPT, TOOLS
+from langgraph.graph import END
 from llm import ModelConfig
 
 
@@ -95,3 +96,20 @@ def agent_node(state: GraphState, runtime) -> dict:
         "trace_id": trace_id,
         "response": text,
     }
+
+
+def tools_node(state: GraphState) -> dict:
+    trace_id = state.get("trace_id")
+    tool_results = []
+    for tc in state["pending_tool_calls"]:
+        result = agent.run_tool(tc["name"], tc["input"], trace_id=trace_id)
+        tool_results.append({"type": "tool_result", "tool_use_id": tc["id"], "content": result})
+    return {"history": [{"role": "user", "content": tool_results}], "pending_tool_calls": None}
+
+
+def route_after_agent(state: GraphState) -> str:
+    if state.get("pending_tool_calls"):
+        return "tools"
+    if state.get("made_tool_call_this_turn"):
+        return "eval"
+    return END

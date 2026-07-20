@@ -112,3 +112,45 @@ def test_agent_node_logs_token_usage(mock_llm, mock_lf, capsys):
 
     captured = capsys.readouterr()
     assert "[tokens: 100 in / 50 out]" in captured.out
+
+
+@patch("graph.agent.run_tool")
+def test_tools_node_executes_and_appends_results(mock_run_tool):
+    from graph import tools_node
+    mock_run_tool.return_value = json.dumps({"products": []})
+    state = empty_state(
+        pending_tool_calls=[{"name": "search_amazon", "id": "tu_1",
+                               "input": {"query": "laptop", "optimize_for": "price", "max_results": 5}}],
+        trace_id="trace-1",
+    )
+
+    result = tools_node(state)
+
+    mock_run_tool.assert_called_once_with(
+        "search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5}, trace_id="trace-1"
+    )
+    assert result["pending_tool_calls"] is None
+    tool_result_msg = result["history"][0]
+    assert tool_result_msg["role"] == "user"
+    assert tool_result_msg["content"][0] == {
+        "type": "tool_result", "tool_use_id": "tu_1", "content": json.dumps({"products": []})
+    }
+
+
+def test_route_after_agent_to_tools_when_pending():
+    from graph import route_after_agent
+    state = empty_state(pending_tool_calls=[{"name": "search_amazon", "id": "tu_1", "input": {}}])
+    assert route_after_agent(state) == "tools"
+
+
+def test_route_after_agent_to_eval_when_recommendation_made():
+    from graph import route_after_agent
+    state = empty_state(pending_tool_calls=None, made_tool_call_this_turn=True, response="Here are...")
+    assert route_after_agent(state) == "eval"
+
+
+def test_route_after_agent_to_end_when_no_tool_call():
+    from langgraph.graph import END
+    from graph import route_after_agent
+    state = empty_state(pending_tool_calls=None, made_tool_call_this_turn=False, response="What are you looking for?")
+    assert route_after_agent(state) == END
