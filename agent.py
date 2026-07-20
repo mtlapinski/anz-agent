@@ -1,6 +1,8 @@
 import json
 import os
 import llm
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from langfuse import Langfuse
 from llm import ModelConfig
 from tools.amazon import search_amazon
@@ -146,3 +148,41 @@ def chat(client, history: list, user_message: str, model_config: ModelConfig) ->
             text = llm_response.text or ""
             history.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
             return text
+
+
+@dataclass
+class EvalScore:
+    overall: int | None
+    note: str | None
+    criteria: dict[str, int] | None = None
+
+
+def record_score(trace_id: str | None, context: dict, score: "EvalScore | None") -> None:
+    if score is None:
+        return
+
+    if trace_id:
+        try:
+            _get_langfuse().create_score(
+                trace_id=trace_id,
+                name="usefulness",
+                value=score.overall,
+                comment=score.note,
+            )
+        except Exception:
+            pass
+
+    try:
+        os.makedirs("evals", exist_ok=True)
+        row = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "query": context.get("query", ""),
+            "optimize_for": context.get("optimize_for", ""),
+            "recommendation": context.get("recommendation", ""),
+            "overall": score.overall,
+            "note": score.note,
+        }
+        with open("evals/scores.jsonl", "a") as f:
+            f.write(json.dumps(row) + "\n")
+    except Exception as e:
+        print(f"Warning: failed to write eval score: {e}")
