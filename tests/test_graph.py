@@ -154,3 +154,84 @@ def test_route_after_agent_to_end_when_no_tool_call():
     from graph import route_after_agent
     state = empty_state(pending_tool_calls=None, made_tool_call_this_turn=False, response="What are you looking for?")
     assert route_after_agent(state) == END
+
+
+@patch("graph.agent.record_score")
+def test_eval_node_interrupts_then_records_score(mock_record_score):
+    from graph import eval_node
+    from unittest.mock import patch as mock_patch
+
+    state = empty_state(
+        last_search_input={"query": "laptop", "optimize_for": "price", "max_results": 5},
+        response="Here are the top laptops...",
+        trace_id="trace-1",
+    )
+
+    with mock_patch("graph.interrupt", return_value="fake-score") as mock_interrupt:
+        result = eval_node(state)
+
+    mock_interrupt.assert_called_once_with({
+        "query": "laptop", "optimize_for": "price", "recommendation": "Here are the top laptops...",
+    })
+    mock_record_score.assert_called_once_with(
+        "trace-1",
+        {"query": "laptop", "optimize_for": "price", "recommendation": "Here are the top laptops..."},
+        "fake-score",
+    )
+    assert result == {}
+
+
+@patch("graph.agent._get_langfuse")
+@patch("graph.llm")
+def test_build_graph_full_flow_with_recommendation(mock_llm, mock_lf):
+    from graph import build_graph, GraphContext
+    from langgraph.types import Command
+
+    mock_llm.complete.side_effect = [
+        LLMResponse(text=None, tool_calls=[{"name": "search_amazon", "id": "tu_1",
+            "input": {"query": "laptop", "optimize_for": "price", "max_results": 5}}],
+            input_tokens=80, output_tokens=20),
+        LLMResponse(text="Here are the top laptops...", tool_calls=None, input_tokens=200, output_tokens=50),
+    ]
+    mock_lf.return_value.create_trace_id.return_value = "trace-1"
+
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "t-full-flow"}}
+    context = GraphContext(client=MagicMock(), model_config=default_config())
+
+    with patch("graph.agent.run_tool") as mock_run_tool, patch("graph.agent.record_score") as mock_record_score:
+        mock_run_tool.return_value = json.dumps({"products": []})
+        result = graph.invoke({"new_message": "Find me a laptop"}, config=config, context=context)
+
+        assert "__interrupt__" in result
+        interrupt_ctx = result["__interrupt__"][0].value
+        assert interrupt_ctx["query"] == "laptop"
+        assert interrupt_ctx["recommendation"] == "Here are the top laptops..."
+
+        from agent import EvalScore
+        score = EvalScore(overall=5, note="great")
+        final = graph.invoke(Command(resume=score), config=config, context=context)
+
+    assert final["response"] == "Here are the top laptops..."
+    mock_record_score.assert_called_once()
+    assert mock_record_score.call_args.args[2].overall == 5
+
+
+@patch("graph.agent._get_langfuse")
+@patch("graph.llm")
+def test_build_graph_skips_eval_when_no_tool_call(mock_llm, mock_lf):
+    from graph import build_graph, GraphContext
+
+    mock_llm.complete.return_value = LLMResponse(
+        text="What are you looking for?", tool_calls=None, input_tokens=10, output_tokens=5
+    )
+    mock_lf.return_value.create_trace_id.return_value = "trace-2"
+
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "t-no-tool-call"}}
+    context = GraphContext(client=MagicMock(), model_config=default_config())
+
+    result = graph.invoke({"new_message": "Find me something"}, config=config, context=context)
+
+    assert "__interrupt__" not in result
+    assert result["response"] == "What are you looking for?"

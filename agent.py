@@ -91,65 +91,6 @@ def run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None) -> s
     raise ValueError(f"Unknown tool: {tool_name}")
 
 
-def chat(client, history: list, user_message: str, model_config: ModelConfig) -> str:
-    try:
-        trace_id = _get_langfuse().create_trace_id()
-    except Exception:
-        trace_id = None
-
-    history.append({"role": "user", "content": user_message})
-
-    while True:
-        generation = None
-        if trace_id:
-            try:
-                generation = _get_langfuse().start_observation(
-                    trace_context={"trace_id": trace_id},
-                    name="llm",
-                    as_type="generation",
-                    input={"system": SYSTEM_PROMPT, "messages": list(history)},
-                    model=f"{model_config.provider}/{model_config.model}",
-                )
-            except Exception:
-                generation = None
-
-        llm_response = llm.complete(client, model_config, SYSTEM_PROMPT, TOOLS, history)
-
-        print(f"[tokens: {llm_response.input_tokens} in / {llm_response.output_tokens} out]")
-
-        if generation:
-            try:
-                generation.update(
-                    output=str(llm_response.text or llm_response.tool_calls),
-                    usage_details={
-                        "input": llm_response.input_tokens,
-                        "output": llm_response.output_tokens,
-                    },
-                )
-                generation.end()
-            except Exception:
-                pass
-
-        if llm_response.tool_calls:
-            tool_results = []
-            for tc in llm_response.tool_calls:
-                result = run_tool(tc["name"], tc["input"], trace_id=trace_id)
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": tc["id"],
-                    "content": result,
-                })
-            history.append({"role": "assistant", "content": [
-                {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["input"]}
-                for tc in llm_response.tool_calls
-            ]})
-            history.append({"role": "user", "content": tool_results})
-        else:
-            text = llm_response.text or ""
-            history.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
-            return text
-
-
 @dataclass
 class EvalScore:
     overall: int | None

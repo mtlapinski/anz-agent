@@ -5,7 +5,9 @@ from typing import Annotated, Any, TypedDict
 import agent
 import llm
 from agent import SYSTEM_PROMPT, TOOLS
-from langgraph.graph import END
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph, START
+from langgraph.types import interrupt
 from llm import ModelConfig
 
 
@@ -112,4 +114,30 @@ def route_after_agent(state: GraphState) -> str:
         return "tools"
     if state.get("made_tool_call_this_turn"):
         return "eval"
+    if state.get("last_search_input") and state.get("response"):
+        return "eval"
     return END
+
+
+def eval_node(state: GraphState) -> dict:
+    search_input = state.get("last_search_input") or {}
+    context = {
+        "query": search_input.get("query", ""),
+        "optimize_for": search_input.get("optimize_for", ""),
+        "recommendation": state.get("response", ""),
+    }
+    score = interrupt(context)
+    agent.record_score(state.get("trace_id"), context, score)
+    return {}
+
+
+def build_graph():
+    builder = StateGraph(GraphState, context_schema=GraphContext)
+    builder.add_node("agent", agent_node)
+    builder.add_node("tools", tools_node)
+    builder.add_node("eval", eval_node)
+    builder.add_edge(START, "agent")
+    builder.add_conditional_edges("agent", route_after_agent, {"tools": "tools", "eval": "eval", END: END})
+    builder.add_edge("tools", "agent")
+    builder.add_edge("eval", END)
+    return builder.compile(checkpointer=MemorySaver())

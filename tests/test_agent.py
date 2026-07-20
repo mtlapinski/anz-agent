@@ -25,111 +25,6 @@ def test_run_tool_unknown_raises():
 
 
 @patch("agent._get_langfuse")
-@patch("agent.llm")
-def test_chat_text_response_updates_history(mock_llm, mock_lf):
-    from agent import chat
-    mock_llm.complete.return_value = LLMResponse(
-        text="What are you looking for?", tool_calls=None, input_tokens=10, output_tokens=5
-    )
-    history = []
-    result = chat(MagicMock(), history, "Hello", default_config())
-    assert result == "What are you looking for?"
-    assert history[0] == {"role": "user", "content": "Hello"}
-    assert history[1]["role"] == "assistant"
-
-
-@patch("agent._get_langfuse")
-@patch("agent.llm")
-def test_chat_tool_call_then_text(mock_llm, mock_lf):
-    from agent import chat
-    mock_llm.complete.side_effect = [
-        LLMResponse(text=None, tool_calls=[{"name": "search_amazon", "id": "tu_123",
-            "input": {"query": "laptop", "optimize_for": "price", "max_results": 5}}],
-            input_tokens=80, output_tokens=20),
-        LLMResponse(text="Here are the top laptops...", tool_calls=None, input_tokens=200, output_tokens=50),
-    ]
-    with patch("agent.search_amazon") as mock_search:
-        mock_search.return_value = {"products": []}
-        history = []
-        result = chat(MagicMock(), history, "Find me a laptop", default_config())
-    assert result == "Here are the top laptops..."
-    assert mock_llm.complete.call_count == 2
-    assert len(history) == 4
-    tool_result_msg = history[2]
-    assert tool_result_msg["role"] == "user"
-    assert tool_result_msg["content"][0]["type"] == "tool_result"
-    assert tool_result_msg["content"][0]["tool_use_id"] == "tu_123"
-
-
-@patch("agent._get_langfuse")
-@patch("agent.llm")
-def test_chat_passes_system_prompt(mock_llm, mock_lf):
-    from agent import chat, SYSTEM_PROMPT
-    mock_llm.complete.return_value = LLMResponse(
-        text="hi", tool_calls=None, input_tokens=10, output_tokens=5
-    )
-    config = default_config()
-    chat(MagicMock(), [], "hi", config)
-    call_kwargs = mock_llm.complete.call_args
-    assert call_kwargs.args[2] == SYSTEM_PROMPT   # system is 3rd positional arg
-
-
-@patch("agent._get_langfuse")
-def test_chat_uses_v4_langfuse_api(mock_lf):
-    from agent import chat, SYSTEM_PROMPT
-    # spec= restricts the mock to real v4 methods; calling a nonexistent method
-    # (e.g. the old .trace()) would raise AttributeError and fail this test.
-    mock_client = MagicMock(spec=["create_trace_id", "start_observation", "create_score", "flush"])
-    mock_client.create_trace_id.return_value = "trace-xyz"
-    mock_generation = MagicMock()
-    mock_client.start_observation.return_value = mock_generation
-    mock_lf.return_value = mock_client
-
-    with patch("agent.llm") as mock_llm:
-        mock_llm.complete.return_value = LLMResponse(
-            text="hi", tool_calls=None, input_tokens=10, output_tokens=5
-        )
-        result = chat(MagicMock(), [], "hello", default_config())
-
-    assert result == "hi"
-    mock_client.create_trace_id.assert_called_once()
-    mock_client.start_observation.assert_called_once_with(
-        trace_context={"trace_id": "trace-xyz"},
-        name="llm",
-        as_type="generation",
-        input={"system": SYSTEM_PROMPT, "messages": [{"role": "user", "content": "hello"}]},
-        model="anthropic/claude-haiku-4-5-20251001",
-    )
-    mock_generation.update.assert_called_once_with(
-        output="hi", usage_details={"input": 10, "output": 5}
-    )
-    mock_generation.end.assert_called_once()
-
-
-@patch("agent._get_langfuse")
-def test_chat_tool_call_passes_trace_id_to_run_tool(mock_lf):
-    from agent import chat
-    mock_client = MagicMock(spec=["create_trace_id", "start_observation", "create_score", "flush"])
-    mock_client.create_trace_id.return_value = "trace-xyz"
-    mock_client.start_observation.return_value = MagicMock()
-    mock_lf.return_value = mock_client
-
-    with patch("agent.llm") as mock_llm, patch("agent.run_tool") as mock_run_tool:
-        mock_llm.complete.side_effect = [
-            LLMResponse(text=None, tool_calls=[{"name": "search_amazon", "id": "tu_1",
-                "input": {"query": "laptop", "optimize_for": "price", "max_results": 5}}],
-                input_tokens=80, output_tokens=20),
-            LLMResponse(text="Here are the top laptops...", tool_calls=None, input_tokens=200, output_tokens=50),
-        ]
-        mock_run_tool.return_value = json.dumps({"products": []})
-        chat(MagicMock(), [], "Find me a laptop", default_config())
-
-    mock_run_tool.assert_called_once_with(
-        "search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5}, trace_id="trace-xyz"
-    )
-
-
-@patch("agent._get_langfuse")
 def test_run_tool_creates_langfuse_span_with_trace_id(mock_lf):
     from agent import run_tool
     mock_client = MagicMock(spec=["create_trace_id", "start_observation", "create_score", "flush"])
@@ -176,20 +71,6 @@ def test_run_tool_continues_when_langfuse_raises(mock_lf):
                             trace_id="trace-123")
 
     assert json.loads(result) == {"products": []}
-
-
-@patch("agent._get_langfuse")
-def test_chat_continues_when_langfuse_raises(mock_lf):
-    from agent import chat
-    mock_lf.side_effect = Exception("langfuse down")
-
-    with patch("agent.llm") as mock_llm:
-        mock_llm.complete.return_value = LLMResponse(
-            text="hi", tool_calls=None, input_tokens=10, output_tokens=5
-        )
-        result = chat(MagicMock(), [], "hello", default_config())
-
-    assert result == "hi"
 
 
 def test_eval_score_defaults():
