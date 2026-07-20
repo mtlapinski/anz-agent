@@ -10,6 +10,40 @@ Describe what you want in plain English. The agent asks clarifying questions, se
 - **SerpAPI** — Amazon product search (100 free searches/month)
 - **Langfuse** — optional LLM observability (traces, token counts)
 
+## Architecture
+
+After a search, the agent pauses to ask you to rate the recommendation before continuing:
+
+```mermaid
+flowchart LR
+    subgraph CLI
+        M[main.py]
+    end
+    subgraph SG["LangGraph StateGraph (graph.py)"]
+        A[agent<br/>calls the LLM]
+        T[tools<br/>runs search_amazon]
+        E[eval<br/>interrupt for rating]
+        END([END])
+        A -->|tool call| T
+        T -->|loop back| A
+        A -->|recommendation ready| E
+        A -->|no tool call| END
+    end
+    subgraph Human
+        P[CLI prompt<br/>rate usefulness 1-5]
+    end
+    subgraph Storage["agent.py"]
+        L[(Langfuse v4<br/>create_score)]
+        J[(evals/scores.jsonl)]
+    end
+
+    M --> A
+    E -->|interrupt value| P
+    P -->|"Command(resume=score)"| E
+    E --> L
+    E --> J
+```
+
 ## Setup
 
 ```bash
@@ -60,11 +94,13 @@ Token usage is printed after each LLM call. Type `quit` or `exit` to stop.
 
 ```
 anz-agent/
-├── main.py          # CLI entry point
-├── agent.py         # Conversation loop + Langfuse tracing
+├── main.py          # CLI entry point — drives the graph, handles eval prompts
+├── graph.py         # LangGraph StateGraph — agent/tools/eval nodes
+├── agent.py         # LLM prompt/tools, Langfuse tracing, eval scoring
 ├── tools/
 │   └── amazon.py    # SerpAPI search tool
 ├── tests/
+├── evals/           # scores.jsonl — eval ratings (gitignored)
 ├── .env.example
 └── requirements.txt
 ```
