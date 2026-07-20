@@ -65,61 +65,73 @@ def _get_langfuse() -> Langfuse:
     return _langfuse
 
 
-def run_tool(tool_name: str, tool_input: dict, trace=None) -> str:
+def run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None) -> str:
     if tool_name == "search_amazon":
-        try:
-            span = trace.span(name="search_amazon", input=tool_input) if trace else None
-        except Exception:
-            span = None
+        span = None
+        if trace_id:
+            try:
+                span = _get_langfuse().start_observation(
+                    trace_context={"trace_id": trace_id},
+                    name="search_amazon",
+                    as_type="tool",
+                    input=tool_input,
+                )
+            except Exception:
+                span = None
         result = search_amazon(**tool_input)
-        try:
-            if span:
-                span.end(output=result)
-        except Exception:
-            pass
+        if span:
+            try:
+                span.update(output=result)
+                span.end()
+            except Exception:
+                pass
         return json.dumps(result)
     raise ValueError(f"Unknown tool: {tool_name}")
 
 
 def chat(client, history: list, user_message: str, model_config: ModelConfig) -> str:
     try:
-        lf = _get_langfuse()
-        trace = lf.trace(name="shopping-turn", input={"message": user_message})
+        trace_id = _get_langfuse().create_trace_id()
     except Exception:
-        trace = None
+        trace_id = None
 
     history.append({"role": "user", "content": user_message})
 
     while True:
-        try:
-            generation = trace.generation(
-                name="llm",
-                model=f"{model_config.provider}/{model_config.model}",
-                input={"system": SYSTEM_PROMPT, "messages": history},
-            ) if trace else None
-        except Exception:
-            generation = None
+        generation = None
+        if trace_id:
+            try:
+                generation = _get_langfuse().start_observation(
+                    trace_context={"trace_id": trace_id},
+                    name="llm",
+                    as_type="generation",
+                    input={"system": SYSTEM_PROMPT, "messages": list(history)},
+                    model=f"{model_config.provider}/{model_config.model}",
+                )
+            except Exception:
+                generation = None
 
         llm_response = llm.complete(client, model_config, SYSTEM_PROMPT, TOOLS, history)
 
         print(f"[tokens: {llm_response.input_tokens} in / {llm_response.output_tokens} out]")
 
-        try:
-            if generation:
-                generation.end(
+        if generation:
+            try:
+                generation.update(
                     output=str(llm_response.text or llm_response.tool_calls),
-                    usage={
+                    usage_details={
                         "input": llm_response.input_tokens,
                         "output": llm_response.output_tokens,
                     },
                 )
-        except Exception:
-            pass
+                generation.end()
+            except Exception:
+                pass
 
         if llm_response.tool_calls:
             tool_results = []
             for tc in llm_response.tool_calls:
-                result = run_tool(tc["name"], tc["input"], trace=trace)
+                result = run_tool(tc["name"], tc["input"], trace_id=trace_id)
                 tool_results.append({
                     "type": "tool_result",
                     "tool_use_id": tc["id"],
@@ -133,9 +145,4 @@ def chat(client, history: list, user_message: str, model_config: ModelConfig) ->
         else:
             text = llm_response.text or ""
             history.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
-            try:
-                if trace:
-                    trace.update(output={"response": text})
-            except Exception:
-                pass
             return text
