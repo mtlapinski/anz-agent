@@ -4,14 +4,14 @@
 
 **Goal:** Add a human-in-the-loop evaluation step that scores whether the agent's Amazon recommendations are useful, restructuring `agent.py`'s conversation loop as a LangGraph `StateGraph` so the eval step can pause execution via `interrupt()`.
 
-**Architecture:** `agent.py`'s hand-rolled `while True` loop becomes a 3-node `StateGraph` (`agent` → `tools` → loop, or `agent` → `eval` when a recommendation is ready). `eval` calls `interrupt()` to pause for a human 1-5 rating, then logs it to Langfuse and a local JSONL file. `llm.py` and `tools/amazon.py` are untouched — LangGraph is orchestration only.
+**Architecture:** Two phases. Phase 1 (Task 1) fixes a pre-existing bug — `agent.py`'s Langfuse tracing calls a v2/v3 API (`lf.trace()`) that doesn't exist in the installed v4 client, so it's been silently failing — fixed and verified *in place*, inside the current synchronous `chat()` loop, before any structural change. Phase 2 (Tasks 2-7) restructures `agent.py`'s loop as a 3-node LangGraph `StateGraph` (`agent` → `tools` → loop, or `agent` → `eval` when a recommendation is ready), porting the now-verified v4 tracing pattern into the new node functions. `eval` calls `interrupt()` to pause for a human 1-5 rating, then logs it to Langfuse and a local JSONL file. `llm.py` and `tools/amazon.py` are untouched — LangGraph is orchestration only.
 
-**Tech Stack:** `langgraph` (new dependency, `StateGraph`/`interrupt`/`Command`/`MemorySaver`), existing `llm.py` provider adapter, `langfuse` v4 client (already a dependency, but see Global Constraints — the currently-used API doesn't exist in the installed version).
+**Tech Stack:** `langgraph` (new dependency, `StateGraph`/`interrupt`/`Command`/`MemorySaver`), existing `llm.py` provider adapter, `langfuse` v4 client (already a dependency; Task 1 fixes the code calling it).
 
 ## Global Constraints
 
 - `langgraph>=1.0.0` in `requirements.txt`. Verified against the actually-installed `1.2.9` — do not use APIs from older `0.2.x`-era tutorials (e.g. `config["configurable"]` for custom dependency injection); this version uses `context_schema` + a node parameter literally named `runtime`.
-- **The installed `langfuse` is `4.5.1`.** `requirements.txt`'s floor is `langfuse>=2.0.0`, but v4 removed the `Langfuse().trace(...)` / `trace.generation(...)` builder API entirely — calling it raises `AttributeError`. All new and modified tracing code in this plan uses the real v4 API: `Langfuse().create_trace_id()`, `Langfuse().start_observation(trace_context={"trace_id": ...}, name=..., as_type=..., ...)`, `<span>.update(...)`, `<span>.end()`, `Langfuse().create_score(trace_id=..., name=..., value=..., comment=...)`.
+- **The installed `langfuse` is `4.5.1`.** `requirements.txt`'s floor is `langfuse>=2.0.0`, but v4 removed the `Langfuse().trace(...)` / `trace.generation(...)` builder API entirely — calling it raises `AttributeError`. This is caught by existing try/except-and-continue code, so it fails silently rather than crashing. Task 1 fixes this using the real v4 API: `Langfuse().create_trace_id()`, `Langfuse().start_observation(trace_context={"trace_id": ...}, name=..., as_type=..., ...)`, `<span>.update(...)`, `<span>.end()`, `Langfuse().create_score(trace_id=..., name=..., value=..., comment=...)`. Every later task that touches tracing builds on this same verified pattern.
 - LangGraph node functions needing injected runtime dependencies (the LLM client, `ModelConfig`) must name their second parameter exactly `runtime` — verified experimentally; a differently-named or type-annotated-only parameter does not get the context injected and raises `TypeError: missing 1 required positional argument`.
 - Every `graph.invoke(...)` call (including the resume call after an interrupt) must pass the same `context=GraphContext(...)` — it is not persisted across calls automatically.
 - All existing error-handling conventions are preserved: Langfuse calls are optional and wrapped in try/except-and-continue; nothing about tracing/scoring failing should crash a conversation turn.
@@ -22,21 +22,291 @@
 
 ```
 anz-agent/
-├── agent.py             # modified — chat() removed; EvalScore, record_score() added; run_tool() takes trace_id
-├── graph.py              # new — GraphContext, GraphState, node functions, build_graph()
-├── main.py               # modified — invokes graph instead of chat(), handles interrupt/resume, prompt_for_score()
-├── requirements.txt      # modified — add langgraph
-├── .gitignore             # modified — add evals/scores.jsonl
+├── agent.py             # Task 1: chat()/run_tool() fixed to v4 Langfuse API.
+│                         # Task 3: EvalScore, record_score() added.
+│                         # Task 6: chat() removed (superseded by graph.py).
+├── graph.py              # new (Tasks 4-6) — GraphContext, GraphState, node functions, build_graph()
+├── main.py               # modified (Task 7) — invokes graph instead of chat(), handles interrupt/resume, prompt_for_score()
+├── requirements.txt      # modified (Task 2) — add langgraph
+├── .gitignore             # modified (Task 3) — add evals/
 └── evals/                 # new dir, created at runtime by record_score(), not committed
 tests/
-├── test_agent.py         # modified — remove chat() tests, add EvalScore/record_score/run_tool tests
-├── test_graph.py         # new — node-level and full-graph tests
-└── test_main.py           # new — prompt_for_score() and handle_model_command() tests
+├── test_agent.py         # Task 1: chat()/run_tool() Langfuse tests updated to v4.
+│                         # Task 3: EvalScore/record_score tests added.
+│                         # Task 6: obsolete chat() tests removed.
+├── test_graph.py         # new (Tasks 4-6) — node-level and full-graph tests
+└── test_main.py           # new (Task 7) — prompt_for_score() and handle_model_command() tests
 ```
 
 ---
 
-### Task 1: Add and verify the `langgraph` dependency
+### Task 1: Fix `agent.py`'s existing Langfuse integration to the real v4 API
+
+**Files:**
+- Modify: `agent.py` (`chat()`, `run_tool()`)
+- Test: `tests/test_agent.py`
+
+**Interfaces:**
+- Modifies `chat(client, history, user_message, model_config) -> str` — same signature, internal tracing calls rewritten to v4.
+- Modifies `run_tool(tool_name: str, tool_input: dict, trace=None)` → `run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None)` — signature changes from passing a `trace` *object* (which no longer has a `.span()` method in v4) to a `trace_id` *string*, since v4's `start_observation(trace_context={"trace_id": ...})` is how you attach a new observation to an existing trace without holding a reference to the original handle.
+
+This is a pure bug fix — no new behavior, no LangGraph yet. It exists so the v4 tracing pattern is proven correct in the current, simple synchronous loop before Task 4 ports the same pattern into `graph.py`'s `agent_node`.
+
+- [ ] **Step 1: Write the failing tests**
+
+In `tests/test_agent.py`, delete the existing `test_chat_logs_token_usage` test (it hardcodes the old, broken v2-style mock chain: `mock_lf.return_value.trace.return_value` / `generation.end(usage=...)` — these methods don't exist on the real v4 client, and after this fix `chat()` won't call them). Replace it and add these tests (the existing `test_run_tool_search_amazon`, `test_run_tool_unknown_raises`, `test_chat_text_response_updates_history`, `test_chat_tool_call_then_text`, `test_chat_passes_system_prompt` stay as-is — they don't assert internal Langfuse call shapes and continue to pass against a plain `MagicMock()`-based `_get_langfuse` patch):
+
+```python
+@patch("agent._get_langfuse")
+def test_chat_uses_v4_langfuse_api(mock_lf):
+    from agent import chat, SYSTEM_PROMPT
+    # spec= restricts the mock to real v4 methods; calling a nonexistent method
+    # (e.g. the old .trace()) would raise AttributeError and fail this test.
+    mock_client = MagicMock(spec=["create_trace_id", "start_observation", "create_score", "flush"])
+    mock_client.create_trace_id.return_value = "trace-xyz"
+    mock_generation = MagicMock()
+    mock_client.start_observation.return_value = mock_generation
+    mock_lf.return_value = mock_client
+
+    with patch("agent.llm") as mock_llm:
+        mock_llm.complete.return_value = LLMResponse(
+            text="hi", tool_calls=None, input_tokens=10, output_tokens=5
+        )
+        result = chat(MagicMock(), [], "hello", default_config())
+
+    assert result == "hi"
+    mock_client.create_trace_id.assert_called_once()
+    mock_client.start_observation.assert_called_once_with(
+        trace_context={"trace_id": "trace-xyz"},
+        name="llm",
+        as_type="generation",
+        input={"system": SYSTEM_PROMPT, "messages": [{"role": "user", "content": "hello"}]},
+        model="anthropic/claude-haiku-4-5-20251001",
+    )
+    mock_generation.update.assert_called_once_with(
+        output="hi", usage_details={"input": 10, "output": 5}
+    )
+    mock_generation.end.assert_called_once()
+
+
+@patch("agent._get_langfuse")
+def test_chat_tool_call_passes_trace_id_to_run_tool(mock_lf):
+    from agent import chat
+    mock_client = MagicMock(spec=["create_trace_id", "start_observation", "create_score", "flush"])
+    mock_client.create_trace_id.return_value = "trace-xyz"
+    mock_client.start_observation.return_value = MagicMock()
+    mock_lf.return_value = mock_client
+
+    with patch("agent.llm") as mock_llm, patch("agent.run_tool") as mock_run_tool:
+        mock_llm.complete.side_effect = [
+            LLMResponse(text=None, tool_calls=[{"name": "search_amazon", "id": "tu_1",
+                "input": {"query": "laptop", "optimize_for": "price", "max_results": 5}}],
+                input_tokens=80, output_tokens=20),
+            LLMResponse(text="Here are the top laptops...", tool_calls=None, input_tokens=200, output_tokens=50),
+        ]
+        mock_run_tool.return_value = json.dumps({"products": []})
+        chat(MagicMock(), [], "Find me a laptop", default_config())
+
+    mock_run_tool.assert_called_once_with(
+        "search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5}, trace_id="trace-xyz"
+    )
+
+
+@patch("agent._get_langfuse")
+def test_run_tool_creates_langfuse_span_with_trace_id(mock_lf):
+    from agent import run_tool
+    mock_client = MagicMock(spec=["create_trace_id", "start_observation", "create_score", "flush"])
+    mock_span = MagicMock()
+    mock_client.start_observation.return_value = mock_span
+    mock_lf.return_value = mock_client
+
+    with patch("agent.search_amazon") as mock_search:
+        mock_search.return_value = {"products": []}
+        run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5},
+                  trace_id="trace-123")
+
+    mock_client.start_observation.assert_called_once_with(
+        trace_context={"trace_id": "trace-123"},
+        name="search_amazon",
+        as_type="tool",
+        input={"query": "laptop", "optimize_for": "price", "max_results": 5},
+    )
+    mock_span.update.assert_called_once_with(output={"products": []})
+    mock_span.end.assert_called_once()
+
+
+@patch("agent._get_langfuse")
+def test_run_tool_no_span_when_trace_id_none(mock_lf):
+    from agent import run_tool
+    mock_client = MagicMock(spec=["create_trace_id", "start_observation", "create_score", "flush"])
+    mock_lf.return_value = mock_client
+
+    with patch("agent.search_amazon") as mock_search:
+        mock_search.return_value = {"products": []}
+        run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5})
+
+    mock_client.start_observation.assert_not_called()
+
+
+@patch("agent._get_langfuse")
+def test_run_tool_continues_when_langfuse_raises(mock_lf):
+    from agent import run_tool
+    mock_lf.side_effect = Exception("langfuse down")
+
+    with patch("agent.search_amazon") as mock_search:
+        mock_search.return_value = {"products": []}
+        result = run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5},
+                            trace_id="trace-123")
+
+    assert json.loads(result) == {"products": []}
+
+
+@patch("agent._get_langfuse")
+def test_chat_continues_when_langfuse_raises(mock_lf):
+    from agent import chat
+    mock_lf.side_effect = Exception("langfuse down")
+
+    with patch("agent.llm") as mock_llm:
+        mock_llm.complete.return_value = LLMResponse(
+            text="hi", tool_calls=None, input_tokens=10, output_tokens=5
+        )
+        result = chat(MagicMock(), [], "hello", default_config())
+
+    assert result == "hi"
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+source .venv/bin/activate && pytest tests/test_agent.py -v
+```
+Expected: the new tests FAIL — `test_chat_uses_v4_langfuse_api` and `test_run_tool_creates_langfuse_span_with_trace_id` fail because current code calls `lf.trace(...)` / `trace.span(...)`, which don't exist on the `spec=[...]`-restricted mocks (`AttributeError`), and `test_chat_tool_call_passes_trace_id_to_run_tool` fails because `run_tool` is currently called with `trace=` not `trace_id=`.
+
+- [ ] **Step 3: Fix `chat()` in `agent.py`**
+
+Replace the existing `chat()` function:
+```python
+def chat(client, history: list, user_message: str, model_config: ModelConfig) -> str:
+    try:
+        trace_id = _get_langfuse().create_trace_id()
+    except Exception:
+        trace_id = None
+
+    history.append({"role": "user", "content": user_message})
+
+    while True:
+        generation = None
+        if trace_id:
+            try:
+                generation = _get_langfuse().start_observation(
+                    trace_context={"trace_id": trace_id},
+                    name="llm",
+                    as_type="generation",
+                    input={"system": SYSTEM_PROMPT, "messages": history},
+                    model=f"{model_config.provider}/{model_config.model}",
+                )
+            except Exception:
+                generation = None
+
+        llm_response = llm.complete(client, model_config, SYSTEM_PROMPT, TOOLS, history)
+
+        print(f"[tokens: {llm_response.input_tokens} in / {llm_response.output_tokens} out]")
+
+        if generation:
+            try:
+                generation.update(
+                    output=str(llm_response.text or llm_response.tool_calls),
+                    usage_details={
+                        "input": llm_response.input_tokens,
+                        "output": llm_response.output_tokens,
+                    },
+                )
+                generation.end()
+            except Exception:
+                pass
+
+        if llm_response.tool_calls:
+            tool_results = []
+            for tc in llm_response.tool_calls:
+                result = run_tool(tc["name"], tc["input"], trace_id=trace_id)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc["id"],
+                    "content": result,
+                })
+            history.append({"role": "assistant", "content": [
+                {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["input"]}
+                for tc in llm_response.tool_calls
+            ]})
+            history.append({"role": "user", "content": tool_results})
+        else:
+            text = llm_response.text or ""
+            history.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
+            return text
+```
+
+- [ ] **Step 4: Fix `run_tool()` in `agent.py`**
+
+Replace the existing `run_tool()` function:
+```python
+def run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None) -> str:
+    if tool_name == "search_amazon":
+        span = None
+        if trace_id:
+            try:
+                span = _get_langfuse().start_observation(
+                    trace_context={"trace_id": trace_id},
+                    name="search_amazon",
+                    as_type="tool",
+                    input=tool_input,
+                )
+            except Exception:
+                span = None
+        result = search_amazon(**tool_input)
+        if span:
+            try:
+                span.update(output=result)
+                span.end()
+            except Exception:
+                pass
+        return json.dumps(result)
+    raise ValueError(f"Unknown tool: {tool_name}")
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+```bash
+source .venv/bin/activate && pytest tests/test_agent.py -v
+```
+Expected: all PASS.
+
+- [ ] **Step 6: Verify the fix manually against the real Langfuse client class**
+
+This confirms the fix works against the actual installed v4 client, not just against mocks:
+```bash
+source .venv/bin/activate && python3 -c "
+from langfuse import Langfuse
+lf = Langfuse(public_key='pk-lf-test', secret_key='sk-lf-test')
+trace_id = lf.create_trace_id()
+gen = lf.start_observation(trace_context={'trace_id': trace_id}, name='llm', as_type='generation', input={'x': 1}, model='anthropic/claude-haiku-4-5')
+gen.update(output='hello', usage_details={'input': 10, 'output': 5})
+gen.end()
+lf.create_score(trace_id=trace_id, name='usefulness', value=4, comment='good')
+print('v4 API calls succeeded, no AttributeError')
+"
+```
+Expected: `v4 API calls succeeded, no AttributeError` (a `Failed to export span batch` warning printed to stderr is expected and harmless — that's the background exporter failing to reach Langfuse's servers with fake test credentials, not a code error).
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add agent.py tests/test_agent.py
+git commit -m "fix: migrate agent.py Langfuse tracing from broken v2 API to real v4 API"
+```
+
+---
+
+### Task 2: Add and verify the `langgraph` dependency
 
 **Files:**
 - Modify: `requirements.txt`
@@ -53,7 +323,6 @@ langgraph>=1.0.0
 
 - [ ] **Step 2: Install and verify**
 
-Run:
 ```bash
 source .venv/bin/activate && pip install -r requirements.txt
 python3 -c "from langgraph.graph import StateGraph, END, START; from langgraph.types import interrupt, Command; from langgraph.checkpoint.memory import MemorySaver; from langgraph.runtime import Runtime; print('ok')"
@@ -69,7 +338,7 @@ git commit -m "chore: add langgraph dependency"
 
 ---
 
-### Task 2: `EvalScore` dataclass and `record_score()` in `agent.py`
+### Task 3: `EvalScore` dataclass and `record_score()` in `agent.py`
 
 **Files:**
 - Modify: `agent.py`
@@ -77,18 +346,16 @@ git commit -m "chore: add langgraph dependency"
 - Test: `tests/test_agent.py`
 
 **Interfaces:**
+- Consumes: `agent._get_langfuse()` (fixed in Task 1 — `create_score(trace_id=..., name=..., value=..., comment=...)` is real v4 API, verified in Task 1 Step 6)
 - Produces:
   - `EvalScore` dataclass: `overall: int | None`, `note: str | None`, `criteria: dict[str, int] | None = None`
   - `record_score(trace_id: str | None, context: dict, score: EvalScore | None) -> None` — `context` is `{"query": str, "optimize_for": str, "recommendation": str}`. Writes to Langfuse (if `trace_id` given) and appends a JSONL line to `evals/scores.jsonl`. If `score is None` (user skipped rating), does nothing (no Langfuse call, no JSONL row).
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/test_agent.py` (new imports at top of file: `import os`, `import tempfile`):
+Add to `tests/test_agent.py` (new imports at top of file: `import os`):
 
 ```python
-from dataclasses import asdict
-
-
 def test_eval_score_defaults():
     from agent import EvalScore
     score = EvalScore(overall=4, note="good pick")
@@ -248,130 +515,25 @@ source .venv/bin/activate && pytest tests/test_agent.py -k "eval_score or record
 ```
 Expected: all PASS.
 
-- [ ] **Step 5: Add `evals/scores.jsonl` to `.gitignore`**
+- [ ] **Step 5: Add `evals/` to `.gitignore`**
 
 Append to `.gitignore`:
 ```
 evals/
 ```
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Run the full test suite**
+
+```bash
+source .venv/bin/activate && pytest tests/ -v
+```
+Expected: all PASS.
+
+- [ ] **Step 7: Commit**
 
 ```bash
 git add agent.py .gitignore tests/test_agent.py
 git commit -m "feat: add EvalScore and record_score() with Langfuse v4 + JSONL storage"
-```
-
----
-
-### Task 3: Fix `run_tool()` to use trace-id-based Langfuse spans (v4 API)
-
-**Files:**
-- Modify: `agent.py`
-- Test: `tests/test_agent.py`
-
-**Interfaces:**
-- Consumes: `agent._get_langfuse()` (Task 2)
-- Produces: `run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None) -> str` — signature changes from `trace=None` (object) to `trace_id=None` (string). This is the real fix for the broken v2-style tracing described in Global Constraints.
-
-- [ ] **Step 1: Write the failing tests**
-
-Existing test `test_run_tool_search_amazon` in `tests/test_agent.py` doesn't pass a trace and should keep passing unmodified — no change needed there. Add these new tests directly below it:
-
-```python
-@patch("agent._get_langfuse")
-def test_run_tool_creates_langfuse_span_with_trace_id(mock_lf):
-    from agent import run_tool
-    mock_client = MagicMock()
-    mock_lf.return_value = mock_client
-    mock_span = MagicMock()
-    mock_client.start_observation.return_value = mock_span
-
-    with patch("agent.search_amazon") as mock_search:
-        mock_search.return_value = {"products": []}
-        run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5},
-                  trace_id="trace-123")
-
-    mock_client.start_observation.assert_called_once_with(
-        trace_context={"trace_id": "trace-123"},
-        name="search_amazon",
-        as_type="tool",
-        input={"query": "laptop", "optimize_for": "price", "max_results": 5},
-    )
-    mock_span.update.assert_called_once_with(output={"products": []})
-    mock_span.end.assert_called_once()
-
-
-@patch("agent._get_langfuse")
-def test_run_tool_no_span_when_trace_id_none(mock_lf):
-    from agent import run_tool
-    with patch("agent.search_amazon") as mock_search:
-        mock_search.return_value = {"products": []}
-        run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5})
-
-    mock_lf.return_value.start_observation.assert_not_called()
-
-
-@patch("agent._get_langfuse")
-def test_run_tool_continues_when_langfuse_raises(mock_lf):
-    from agent import run_tool
-    mock_lf.side_effect = Exception("langfuse down")
-
-    with patch("agent.search_amazon") as mock_search:
-        mock_search.return_value = {"products": []}
-        result = run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5},
-                            trace_id="trace-123")
-
-    assert json.loads(result) == {"products": []}
-```
-
-- [ ] **Step 2: Run tests to verify they fail**
-
-```bash
-source .venv/bin/activate && pytest tests/test_agent.py -k "run_tool" -v
-```
-Expected: the two new tests FAIL (span assertions don't match current object-based `trace` code path).
-
-- [ ] **Step 3: Update `run_tool()`**
-
-Replace the existing `run_tool` function in `agent.py`:
-```python
-def run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None) -> str:
-    if tool_name == "search_amazon":
-        span = None
-        if trace_id:
-            try:
-                span = _get_langfuse().start_observation(
-                    trace_context={"trace_id": trace_id},
-                    name="search_amazon",
-                    as_type="tool",
-                    input=tool_input,
-                )
-            except Exception:
-                span = None
-        result = search_amazon(**tool_input)
-        if span:
-            try:
-                span.update(output=result)
-                span.end()
-            except Exception:
-                pass
-        return json.dumps(result)
-    raise ValueError(f"Unknown tool: {tool_name}")
-```
-
-- [ ] **Step 4: Run tests to verify they pass**
-
-```bash
-source .venv/bin/activate && pytest tests/test_agent.py -k "run_tool" -v
-```
-Expected: all PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add agent.py tests/test_agent.py
-git commit -m "fix: migrate run_tool() Langfuse tracing to v4 API (trace_id-based spans)"
 ```
 
 ---
@@ -383,11 +545,11 @@ git commit -m "fix: migrate run_tool() Langfuse tracing to v4 API (trace_id-base
 - Test: `tests/test_graph.py`
 
 **Interfaces:**
-- Consumes: `llm.complete()` (existing), `agent.SYSTEM_PROMPT`, `agent.TOOLS`, `agent._get_langfuse()` (existing/Task 2)
+- Consumes: `llm.complete()` (existing), `agent.SYSTEM_PROMPT`, `agent.TOOLS`, `agent._get_langfuse()` (fixed in Task 1)
 - Produces:
   - `GraphContext` dataclass: `client: Any`, `model_config: ModelConfig`
   - `GraphState` TypedDict: `history: Annotated[list, add_to_history]`, `new_message: str | None`, `made_tool_call_this_turn: bool`, `pending_tool_calls: list | None`, `last_search_input: dict | None`, `trace_id: str | None`, `response: str | None`
-  - `agent_node(state: GraphState, runtime) -> dict`
+  - `agent_node(state: GraphState, runtime) -> dict` — this ports the exact v4 tracing pattern verified in Task 1's `chat()` fix into the new node.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -641,7 +803,7 @@ git commit -m "feat: add graph.py with GraphContext, GraphState, agent_node"
 - Test: `tests/test_graph.py`
 
 **Interfaces:**
-- Consumes: `agent.run_tool(tool_name, tool_input, trace_id=None)` (Task 3)
+- Consumes: `agent.run_tool(tool_name, tool_input, trace_id=None)` (fixed in Task 1)
 - Produces: `tools_node(state: GraphState) -> dict`, `route_after_agent(state: GraphState) -> str` (returns `"tools"`, `"eval"`, or `"__end__"`)
 
 - [ ] **Step 1: Write the failing tests**
@@ -748,16 +910,13 @@ git commit -m "feat: add tools_node and route_after_agent to graph.py"
 - Test: `tests/test_graph.py`
 
 **Interfaces:**
-- Consumes: `agent.record_score()` (Task 2)
+- Consumes: `agent.record_score()` (Task 3)
 - Produces: `eval_node(state: GraphState) -> dict`, `build_graph() -> CompiledStateGraph` (compiled with `MemorySaver`, nodes `"agent"`, `"tools"`, `"eval"`)
 
 - [ ] **Step 1: Write the failing tests**
 
 Add to `tests/test_graph.py`:
 ```python
-from langgraph.types import interrupt
-
-
 @patch("graph.agent.record_score")
 def test_eval_node_interrupts_then_records_score(mock_record_score):
     from graph import eval_node
@@ -890,9 +1049,9 @@ Expected: all PASS.
 
 - [ ] **Step 5: Remove `agent.chat()` and its obsolete tests**
 
-In `agent.py`, delete the entire `chat()` function (it's fully superseded by `agent_node` + `tools_node` in `graph.py`).
+In `agent.py`, delete the entire `chat()` function (Task 1 fixed it, and it's now fully superseded by `agent_node` + `tools_node` in `graph.py`).
 
-In `tests/test_agent.py`, delete these now-obsolete tests (they test the removed `chat()` function): `test_chat_text_response_updates_history`, `test_chat_tool_call_then_text`, `test_chat_passes_system_prompt`, `test_chat_logs_token_usage`.
+In `tests/test_agent.py`, delete these now-obsolete tests (they test the removed `chat()` function): `test_chat_text_response_updates_history`, `test_chat_tool_call_then_text`, `test_chat_passes_system_prompt`, `test_chat_uses_v4_langfuse_api`, `test_chat_tool_call_passes_trace_id_to_run_tool`, `test_chat_continues_when_langfuse_raises`.
 
 - [ ] **Step 6: Run the full test suite**
 
@@ -917,7 +1076,7 @@ git commit -m "feat: add eval_node and build_graph(); remove superseded agent.ch
 - Test: `tests/test_main.py`
 
 **Interfaces:**
-- Consumes: `graph.build_graph()`, `graph.GraphContext` (Task 6), `agent.EvalScore` (Task 2)
+- Consumes: `graph.build_graph()`, `graph.GraphContext` (Task 6), `agent.EvalScore` (Task 3)
 - Produces: `prompt_for_score() -> EvalScore | None`, `handle_model_command(args, current_config, graph, thread_id) -> tuple[ModelConfig, str]` (signature changed: takes `graph` and `thread_id` instead of `history`)
 
 - [ ] **Step 1: Write the failing tests**
@@ -1194,7 +1353,7 @@ if __name__ == "__main__":
     main()
 ```
 
-Note: the old `if history and history[-1]["role"] == "user": history.pop()` rollback-on-error logic is gone. It's no longer needed — LangGraph only commits a node's checkpoint on successful return, so a failed `graph.invoke()` call leaves the checkpointed `history` untouched automatically (verified experimentally: a raised exception inside a node does not commit that node's `history` delta).
+Note: the old `if history and history[-1]["role"] == "user": history.pop()` rollback-on-error logic is gone. It's no longer needed — LangGraph only commits a node's checkpoint on successful return, so a failed `graph.invoke()` call leaves the checkpointed `history` untouched automatically (verified experimentally during design: a raised exception inside a node does not commit that node's `history` delta).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
