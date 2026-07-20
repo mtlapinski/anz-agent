@@ -1,6 +1,5 @@
 import builtins
 from unittest.mock import MagicMock, patch
-import pytest
 from llm import ModelConfig
 
 

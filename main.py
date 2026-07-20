@@ -141,17 +141,20 @@ def main() -> None:
         context = GraphContext(client=client, model_config=model_config)
         try:
             result = graph.invoke({"new_message": user_input}, config=config, context=context)
-            if result.get("__interrupt__"):
+            interrupted = bool(result.get("__interrupt__"))
+            if interrupted:
                 interrupt_ctx = result["__interrupt__"][0].value
                 print(f"\nRecommendation: {interrupt_ctx['recommendation']}\n")
                 score = prompt_for_score()
                 result = graph.invoke(Command(resume=score), config=config, context=context)
-            print(f"\nAssistant: {result['response']}\n")
+            else:
+                print(f"\nAssistant: {result['response']}\n")
         except KeyboardInterrupt:
             print("\nGoodbye!")
             break
         except Exception as e:
-            print(f"\nError: {e}. Please try again.\n")
+            thread_id = str(uuid.uuid4())
+            print(f"\nError: {e}. Starting a new conversation due to the error. Please try again.\n")
 
     try:
         _get_langfuse().flush()
