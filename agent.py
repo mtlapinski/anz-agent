@@ -1,6 +1,5 @@
 import json
 import os
-import anthropic
 import llm
 from langfuse import Langfuse
 from llm import ModelConfig

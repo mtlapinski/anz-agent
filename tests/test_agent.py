@@ -4,30 +4,6 @@ from unittest.mock import MagicMock, patch, call
 from llm import ModelConfig, LLMResponse
 
 
-def make_text_response(text="What are you looking for?"):
-    block = MagicMock()
-    block.type = "text"
-    block.text = text
-    response = MagicMock()
-    response.stop_reason = "end_turn"
-    response.content = [block]
-    return response
-
-
-def make_tool_response(tool_name="search_amazon", tool_input=None, tool_id="tu_123"):
-    if tool_input is None:
-        tool_input = {"query": "laptop", "optimize_for": "price", "max_results": 5}
-    block = MagicMock()
-    block.type = "tool_use"
-    block.name = tool_name
-    block.id = tool_id
-    block.input = tool_input
-    response = MagicMock()
-    response.stop_reason = "tool_use"
-    response.content = [block]
-    return response
-
-
 def default_config():
     return ModelConfig(provider="anthropic", model="claude-haiku-4-5-20251001")
 

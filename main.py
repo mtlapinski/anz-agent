@@ -104,10 +104,12 @@ def main() -> None:
         if not user_input:
             continue
 
-        if user_input.startswith("/model"):
+        if user_input == "/model" or user_input.startswith("/model "):
             args = user_input[len("/model"):].strip()
+            old_config = model_config
             model_config, history = handle_model_command(args, model_config, history)
-            client = create_client(model_config)
+            if model_config != old_config:
+                client = create_client(model_config)
             continue
 
         try:
@@ -117,6 +119,8 @@ def main() -> None:
             print("\nGoodbye!")
             break
         except Exception as e:
+            if history and history[-1]["role"] == "user":
+                history.pop()
             print(f"\nError: {e}. Please try again.\n")
 
     try:

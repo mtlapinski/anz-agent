@@ -1,4 +1,5 @@
 from __future__ import annotations
+import json
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -81,6 +82,8 @@ def _complete_anthropic(client, model: str, system: str, tools: list[dict], mess
 
 
 def _complete_google(model_name: str, system: str, tools: list[dict], messages: list[dict]) -> LLMResponse:
+    if genai is None:
+        raise ImportError("google-generativeai is not installed. Run: pip install google-generativeai")
     google_tools = _anthropic_tools_to_google(tools)
     google_messages = _anthropic_messages_to_google(messages)
 
@@ -124,7 +127,6 @@ def _anthropic_tools_to_google(tools: list[dict]) -> list[dict]:
 
 
 def _anthropic_messages_to_google(messages: list[dict]) -> list[dict]:
-    import json
     result = []
     for msg in messages:
         role = "model" if msg["role"] == "assistant" else "user"
