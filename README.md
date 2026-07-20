@@ -17,7 +17,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env
-# Fill in ANTHROPIC_API_KEY and SERPAPI_KEY
+# Fill in SERPAPI_KEY and either GOOGLE_API_KEY or ANTHROPIC_API_KEY
 ```
 
 ## Run
@@ -26,17 +26,35 @@ cp .env.example .env
 python main.py
 ```
 
+At startup you'll be prompted to choose a provider and model:
+```
+Provider? [1] Google (default)  [2] Anthropic :
+Model? [gemini-2.0-flash-lite] :
+```
+
+Press Enter to accept the defaults. Type `/model` at any time to switch mid-session.
+
 Token usage is printed after each LLM call. Type `quit` or `exit` to stop.
 
 ## Configuration
 
-| Variable | Required | Notes |
+| Variable | Required for |
+|---|---|
+| `GOOGLE_API_KEY` | Google provider — [aistudio.google.com](https://aistudio.google.com/app/apikey) |
+| `ANTHROPIC_API_KEY` | Anthropic provider — [console.anthropic.com](https://console.anthropic.com) |
+| `SERPAPI_KEY` | Always — [serpapi.com](https://serpapi.com) (100 free searches/month) |
+| `LANGFUSE_PUBLIC_KEY` | No — optional observability |
+| `LANGFUSE_SECRET_KEY` | No — optional observability |
+| `LANGFUSE_HOST` | No — defaults to Langfuse cloud |
+
+## Models
+
+| Provider | Recommended model | Notes |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Yes | [console.anthropic.com](https://console.anthropic.com) |
-| `SERPAPI_KEY` | Yes | [serpapi.com](https://serpapi.com) — 100 free searches/month |
-| `LANGFUSE_PUBLIC_KEY` | No | Optional observability |
-| `LANGFUSE_SECRET_KEY` | No | Optional observability |
-| `LANGFUSE_HOST` | No | Defaults to Langfuse cloud |
+| Google | `gemini-2.0-flash-lite` | Default — cheapest |
+| Google | `gemini-2.0-flash` | Better quality |
+| Anthropic | `claude-haiku-4-5-20251001` | Fast and cheap |
+| Anthropic | `claude-sonnet-4-6` | Higher quality |
 
 ## Project Structure
 
