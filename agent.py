@@ -1,7 +1,9 @@
 import json
 import os
 import anthropic
+import llm
 from langfuse import Langfuse
+from llm import ModelConfig
 from tools.amazon import search_amazon
 
 SYSTEM_PROMPT = """You are a helpful Amazon shopping assistant. Your job is to help the user find the right product at the right price.
@@ -80,7 +82,7 @@ def run_tool(tool_name: str, tool_input: dict, trace=None) -> str:
     raise ValueError(f"Unknown tool: {tool_name}")
 
 
-def chat(client: anthropic.Anthropic, history: list, user_message: str) -> str:
+def chat(client, history: list, user_message: str, model_config: ModelConfig) -> str:
     try:
         lf = _get_langfuse()
         trace = lf.trace(name="shopping-turn", input={"message": user_message})
@@ -92,54 +94,45 @@ def chat(client: anthropic.Anthropic, history: list, user_message: str) -> str:
     while True:
         try:
             generation = trace.generation(
-                name="claude",
-                model="claude-haiku-4-5-20251001",
+                name="llm",
+                model=f"{model_config.provider}/{model_config.model}",
                 input={"system": SYSTEM_PROMPT, "messages": history},
             ) if trace else None
         except Exception:
             generation = None
 
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=2048,
-            system=SYSTEM_PROMPT,
-            tools=TOOLS,
-            messages=history,
-        )
+        llm_response = llm.complete(client, model_config, SYSTEM_PROMPT, TOOLS, history)
 
-        print(f"[tokens: {response.usage.input_tokens} in / {response.usage.output_tokens} out]")
+        print(f"[tokens: {llm_response.input_tokens} in / {llm_response.output_tokens} out]")
 
         try:
             if generation:
                 generation.end(
-                    output=str(response.content),
+                    output=str(llm_response.text or llm_response.tool_calls),
                     usage={
-                        "input": response.usage.input_tokens,
-                        "output": response.usage.output_tokens,
+                        "input": llm_response.input_tokens,
+                        "output": llm_response.output_tokens,
                     },
                 )
         except Exception:
             pass
 
-        if response.stop_reason == "tool_use":
+        if llm_response.tool_calls:
             tool_results = []
-            for block in response.content:
-                if block.type == "tool_use":
-                    result = run_tool(block.name, block.input, trace=trace)
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": block.id,
-                        "content": result,
-                    })
+            for tc in llm_response.tool_calls:
+                result = run_tool(tc["name"], tc["input"], trace=trace)
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": tc["id"],
+                    "content": result,
+                })
             history.append({"role": "assistant", "content": [
-                {"type": "tool_use", "id": b.id, "name": b.name, "input": b.input}
-                for b in response.content if b.type == "tool_use"
+                {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["input"]}
+                for tc in llm_response.tool_calls
             ]})
             history.append({"role": "user", "content": tool_results})
         else:
-            if response.stop_reason not in ("end_turn", "stop_sequence"):
-                raise RuntimeError(f"Unexpected stop_reason: {response.stop_reason!r}")
-            text = next((b.text for b in response.content if hasattr(b, "text")), "")
+            text = llm_response.text or ""
             history.append({"role": "assistant", "content": [{"type": "text", "text": text}]})
             try:
                 if trace:
