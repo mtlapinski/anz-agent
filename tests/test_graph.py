@@ -93,10 +93,35 @@ def test_agent_node_continues_turn_without_new_message(mock_llm, mock_lf):
     )
 
     assert result["response"] == "Here are the top laptops..."
-    assert result["made_tool_call_this_turn"] is False  # must reset — no tool call this call
+    assert result["made_tool_call_this_turn"] is True  # preserved — this text response follows a tool call earlier in the same turn, must route to eval
     assert result["pending_tool_calls"] is None
     assert result["trace_id"] == "trace-2"  # reused, not regenerated
     mock_lf.return_value.create_trace_id.assert_not_called()
+
+
+@patch("graph.agent._get_langfuse")
+@patch("graph.llm")
+def test_agent_node_resets_stale_flags_on_new_turn(mock_llm, mock_lf):
+    from graph import agent_node, GraphContext
+    mock_llm.complete.return_value = LLMResponse(
+        text="Sure, anything else?", tool_calls=None, input_tokens=10, output_tokens=5
+    )
+    mock_lf.return_value.create_trace_id.return_value = "trace-3"
+    runtime = FakeRuntime(GraphContext(client=MagicMock(), model_config=default_config()))
+
+    # Simulate state left over from a PRIOR turn that made a search and produced a recommendation.
+    stale_state = empty_state(
+        new_message="thanks, what about accessories?",
+        made_tool_call_this_turn=True,
+        last_search_input={"query": "laptop", "optimize_for": "price", "max_results": 5},
+        trace_id="trace-2",
+    )
+
+    result = agent_node(stale_state, runtime)
+
+    # This turn made no tool call — both flags must reset, not carry over from the prior turn.
+    assert result["made_tool_call_this_turn"] is False
+    assert result["last_search_input"] is None
 
 
 @patch("graph.agent._get_langfuse")

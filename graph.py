@@ -37,9 +37,13 @@ def agent_node(state: GraphState, runtime) -> dict:
 
     delta = []
     trace_id = state.get("trace_id")
+    made_tool_call_this_turn = state.get("made_tool_call_this_turn", False)
+    last_search_input = state.get("last_search_input")
 
     if state.get("new_message"):
         delta.append({"role": "user", "content": state["new_message"]})
+        made_tool_call_this_turn = False
+        last_search_input = None
         try:
             trace_id = agent._get_langfuse().create_trace_id()
         except Exception:
@@ -84,7 +88,7 @@ def agent_node(state: GraphState, runtime) -> dict:
             "new_message": None,
             "made_tool_call_this_turn": True,
             "pending_tool_calls": llm_response.tool_calls,
-            "last_search_input": search_call["input"] if search_call else state.get("last_search_input"),
+            "last_search_input": search_call["input"] if search_call else last_search_input,
             "trace_id": trace_id,
         }
 
@@ -93,8 +97,9 @@ def agent_node(state: GraphState, runtime) -> dict:
     return {
         "history": delta,
         "new_message": None,
-        "made_tool_call_this_turn": False,
+        "made_tool_call_this_turn": made_tool_call_this_turn,
         "pending_tool_calls": None,
+        "last_search_input": last_search_input,
         "trace_id": trace_id,
         "response": text,
     }
@@ -113,8 +118,6 @@ def route_after_agent(state: GraphState) -> str:
     if state.get("pending_tool_calls"):
         return "tools"
     if state.get("made_tool_call_this_turn"):
-        return "eval"
-    if state.get("last_search_input") and state.get("response"):
         return "eval"
     return END
 
