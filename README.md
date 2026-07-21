@@ -104,3 +104,7 @@ anz-agent/
 ├── .env.example
 └── requirements.txt
 ```
+
+## Backlog
+
+Deferred work items live in [docs/BACKLOG.md](docs/BACKLOG.md).
