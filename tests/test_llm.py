@@ -95,7 +95,7 @@ def test_complete_anthropic_unexpected_stop_reason_raises():
 def make_google_text_response(text="Here are results"):
     part = MagicMock()
     part.text = text
-    del part.function_call  # ensure hasattr check fails
+    part.function_call = None  # falsy, so the tool-call branch is skipped
     candidate = MagicMock()
     candidate.content.parts = [part]
     response = MagicMock()
@@ -113,6 +113,7 @@ def make_google_tool_response(name="search_amazon", args=None):
     fc.args = args
     part = MagicMock()
     part.function_call = fc
+    part.text = None
     candidate = MagicMock()
     candidate.content.parts = [part]
     response = MagicMock()
@@ -122,15 +123,23 @@ def make_google_tool_response(name="search_amazon", args=None):
     return response
 
 
+def test_create_client_google():
+    config = ModelConfig(provider="google", model="gemini-flash-lite-latest")
+    with patch("google.genai.Client") as mock_cls, \
+         patch("llm.os.environ", {"GOOGLE_API_KEY": "test-key"}):
+        mock_cls.return_value = MagicMock()
+        client = create_client(config)
+    mock_cls.assert_called_once_with(api_key="test-key")
+    assert client is not None
+
+
 def test_complete_google_text_response():
-    config = ModelConfig(provider="google", model="gemini-2.0-flash-lite")
+    config = ModelConfig(provider="google", model="gemini-flash-lite-latest")
 
-    mock_model = MagicMock()
-    mock_model.generate_content.return_value = make_google_text_response("Great choice!")
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = make_google_text_response("Great choice!")
 
-    with patch("llm.genai") as mock_genai:
-        mock_genai.GenerativeModel.return_value = mock_model
-        result = complete(None, config, "system", [], [{"role": "user", "content": "hi"}])
+    result = complete(mock_client, config, "system", [], [{"role": "user", "content": "hi"}])
 
     assert result.text == "Great choice!"
     assert result.tool_calls is None
@@ -139,14 +148,12 @@ def test_complete_google_text_response():
 
 
 def test_complete_google_tool_response():
-    config = ModelConfig(provider="google", model="gemini-2.0-flash-lite")
+    config = ModelConfig(provider="google", model="gemini-flash-lite-latest")
 
-    mock_model = MagicMock()
-    mock_model.generate_content.return_value = make_google_tool_response()
+    mock_client = MagicMock()
+    mock_client.models.generate_content.return_value = make_google_tool_response()
 
-    with patch("llm.genai") as mock_genai:
-        mock_genai.GenerativeModel.return_value = mock_model
-        result = complete(None, config, "system", [], [{"role": "user", "content": "find blender"}])
+    result = complete(mock_client, config, "system", [], [{"role": "user", "content": "find blender"}])
 
     assert result.text is None
     assert result.tool_calls is not None
@@ -172,7 +179,7 @@ def test_anthropic_tools_to_google():
     decl = result[0]["function_declarations"][0]
     assert decl["name"] == "search_amazon"
     assert decl["description"] == "Search Amazon"
-    assert decl["parameters"]["properties"]["query"]["type"] == "string"
+    assert decl["parameters_json_schema"]["properties"]["query"]["type"] == "string"
 
 
 def test_anthropic_messages_to_google_plain_text():

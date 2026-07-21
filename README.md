@@ -63,7 +63,7 @@ python main.py
 At startup you'll be prompted to choose a provider and model:
 ```
 Provider? [1] Google (default)  [2] Anthropic :
-Model? [gemini-2.0-flash-lite] :
+Model? [gemini-flash-lite-latest] :
 ```
 
 Press Enter to accept the defaults. Type `/model` at any time to switch mid-session.
@@ -85,8 +85,8 @@ Token usage is printed after each LLM call. Type `quit` or `exit` to stop.
 
 | Provider | Recommended model | Notes |
 |---|---|---|
-| Google | `gemini-2.0-flash-lite` | Default — cheapest |
-| Google | `gemini-2.0-flash` | Better quality |
+| Google | `gemini-flash-lite-latest` | Default — cheapest, tracks Google's current lite model |
+| Google | `gemini-flash-latest` | Better quality |
 | Anthropic | `claude-haiku-4-5-20251001` | Fast and cheap |
 | Anthropic | `claude-sonnet-4-6` | Higher quality |
 

@@ -7,9 +7,11 @@ from typing import Any
 import anthropic
 
 try:
-    import google.generativeai as genai
+    from google import genai
+    from google.genai import types as genai_types
 except ImportError:
     genai = None  # type: ignore
+    genai_types = None  # type: ignore
 
 
 @dataclass
@@ -30,9 +32,8 @@ def create_client(config: ModelConfig) -> Any:
     if config.provider == "anthropic":
         return anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     if config.provider == "google":
-        import google.generativeai as genai
-        genai.configure(api_key=os.environ["GOOGLE_API_KEY"])
-        return genai
+        from google import genai
+        return genai.Client(api_key=os.environ["GOOGLE_API_KEY"])
     raise ValueError(f"Unknown provider: {config.provider!r}")
 
 
@@ -46,7 +47,7 @@ def complete(
     if config.provider == "anthropic":
         return _complete_anthropic(client, config.model, system, tools, messages)
     if config.provider == "google":
-        return _complete_google(config.model, system, tools, messages)
+        return _complete_google(client, config.model, system, tools, messages)
     raise ValueError(f"Unknown provider: {config.provider!r}")
 
 
@@ -81,18 +82,20 @@ def _complete_anthropic(client, model: str, system: str, tools: list[dict], mess
     )
 
 
-def _complete_google(model_name: str, system: str, tools: list[dict], messages: list[dict]) -> LLMResponse:
+def _complete_google(client, model_name: str, system: str, tools: list[dict], messages: list[dict]) -> LLMResponse:
     if genai is None:
-        raise ImportError("google-generativeai is not installed. Run: pip install google-generativeai")
+        raise ImportError("google-genai is not installed. Run: pip install google-genai")
     google_tools = _anthropic_tools_to_google(tools)
     google_messages = _anthropic_messages_to_google(messages)
 
-    model = genai.GenerativeModel(
-        model_name=model_name,
-        system_instruction=system,
-        tools=google_tools,
+    response = client.models.generate_content(
+        model=model_name,
+        contents=google_messages,
+        config=genai_types.GenerateContentConfig(
+            system_instruction=system,
+            tools=google_tools,
+        ),
     )
-    response = model.generate_content(google_messages)
 
     usage = response.usage_metadata
     input_tokens = usage.prompt_token_count if usage else 0
@@ -101,7 +104,7 @@ def _complete_google(model_name: str, system: str, tools: list[dict], messages: 
     parts = response.candidates[0].content.parts
     tool_calls = []
     for part in parts:
-        if hasattr(part, "function_call") and part.function_call.name:
+        if part.function_call and part.function_call.name:
             tool_calls.append({
                 "name": part.function_call.name,
                 "id": f"google_{part.function_call.name}",
@@ -111,7 +114,7 @@ def _complete_google(model_name: str, system: str, tools: list[dict], messages: 
     if tool_calls:
         return LLMResponse(text=None, tool_calls=tool_calls, input_tokens=input_tokens, output_tokens=output_tokens)
 
-    text = "".join(part.text for part in parts if hasattr(part, "text"))
+    text = "".join(part.text for part in parts if part.text)
     return LLMResponse(text=text, tool_calls=None, input_tokens=input_tokens, output_tokens=output_tokens)
 
 
@@ -120,7 +123,7 @@ def _anthropic_tools_to_google(tools: list[dict]) -> list[dict]:
         return []
     return [{
         "function_declarations": [
-            {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}
+            {"name": t["name"], "description": t["description"], "parameters_json_schema": t["input_schema"]}
             for t in tools
         ]
     }]

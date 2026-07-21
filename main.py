@@ -8,7 +8,7 @@ from agent import EvalScore, _get_langfuse
 from graph import build_graph, GraphContext
 
 DEFAULT_PROVIDER = "google"
-DEFAULT_MODEL = "gemini-2.0-flash-lite"
+DEFAULT_MODEL = "gemini-flash-lite-latest"
 ANTHROPIC_DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
 PROVIDER_KEYS = {
@@ -72,7 +72,7 @@ def handle_model_command(args: str, current_config: ModelConfig, graph, thread_i
     if args:
         parts = args.strip().split(None, 1)
         if len(parts) != 2:
-            print("Usage: /model <provider> <model>  (e.g. /model google gemini-2.0-flash-lite)")
+            print("Usage: /model <provider> <model>  (e.g. /model google gemini-flash-lite-latest)")
             return current_config, thread_id
         provider, model = parts
         if provider not in PROVIDER_KEYS:
