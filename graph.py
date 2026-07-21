@@ -79,7 +79,13 @@ def agent_node(state: GraphState, runtime) -> dict:
 
     if llm_response.tool_calls:
         delta.append({"role": "assistant", "content": [
-            {"type": "tool_use", "id": tc["id"], "name": tc["name"], "input": tc["input"]}
+            {
+                "type": "tool_use",
+                "id": tc["id"],
+                "name": tc["name"],
+                "input": tc["input"],
+                "thought_signature": tc.get("thought_signature"),
+            }
             for tc in llm_response.tool_calls
         ]})
         search_call = next((tc for tc in llm_response.tool_calls if tc["name"] == "search_amazon"), None)

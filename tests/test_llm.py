@@ -105,7 +105,7 @@ def make_google_text_response(text="Here are results"):
     return response
 
 
-def make_google_tool_response(name="search_amazon", args=None):
+def make_google_tool_response(name="search_amazon", args=None, thought_signature=b"sig-123"):
     if args is None:
         args = {"query": "blender", "optimize_for": "price", "max_results": 5}
     fc = MagicMock()
@@ -114,6 +114,7 @@ def make_google_tool_response(name="search_amazon", args=None):
     part = MagicMock()
     part.function_call = fc
     part.text = None
+    part.thought_signature = thought_signature
     candidate = MagicMock()
     candidate.content.parts = [part]
     response = MagicMock()
@@ -159,8 +160,32 @@ def test_complete_google_tool_response():
     assert result.tool_calls is not None
     assert result.tool_calls[0]["name"] == "search_amazon"
     assert result.tool_calls[0]["input"] == {"query": "blender", "optimize_for": "price", "max_results": 5}
+    assert result.tool_calls[0]["thought_signature"] == b"sig-123"
     assert result.input_tokens == 150
     assert result.output_tokens == 30
+
+
+def test_anthropic_messages_to_google_roundtrips_thought_signature():
+    from llm import _anthropic_messages_to_google
+    messages = [
+        {"role": "user", "content": "find a purple balance beam"},
+        {"role": "assistant", "content": [
+            {
+                "type": "tool_use",
+                "id": "google_search_amazon",
+                "name": "search_amazon",
+                "input": {"query": "balance beam", "optimize_for": "price", "max_results": 5},
+                "thought_signature": b"sig-123",
+            }
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "google_search_amazon", "content": '{"results": []}'}
+        ]},
+    ]
+    result = _anthropic_messages_to_google(messages)
+    fc_part = result[1]["parts"][0]
+    assert fc_part["function_call"]["name"] == "search_amazon"
+    assert fc_part["thought_signature"] == b"sig-123"
 
 
 def test_anthropic_tools_to_google():
