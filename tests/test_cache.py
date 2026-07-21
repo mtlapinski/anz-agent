@@ -29,3 +29,25 @@ def test_lookup_exact_match_ignores_word_order():
 def test_lookup_returns_none_on_empty_cache():
     from tools.cache import lookup
     assert lookup("anything") is None
+
+
+def test_lookup_gracefully_handles_unreachable_db(monkeypatch, tmp_path):
+    """Verify lookup returns None (cache miss) when DB is unreachable, not an exception."""
+    from tools.cache import lookup
+    # Point DB_PATH to a directory, not a file — sqlite3.connect() will fail
+    monkeypatch.setattr("tools.cache.DB_PATH", str(tmp_path))
+
+    result = lookup("test query")
+
+    # Should return None (cache miss) not raise an exception
+    assert result is None
+
+
+def test_store_gracefully_handles_unreachable_db(monkeypatch, tmp_path):
+    """Verify store does not raise when DB is unreachable."""
+    from tools.cache import store
+    # Point DB_PATH to a directory, not a file — sqlite3.connect() will fail
+    monkeypatch.setattr("tools.cache.DB_PATH", str(tmp_path))
+
+    # Should not raise an exception, even though DB is unreachable
+    store("test query", [{"title": "test"}])
