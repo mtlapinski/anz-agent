@@ -14,6 +14,7 @@ def empty_state(**overrides):
         "made_tool_call_this_turn": False,
         "pending_tool_calls": None,
         "last_search_input": None,
+        "last_search_results": None,
         "trace_id": None,
         "response": None,
     }
@@ -159,6 +160,21 @@ def test_tools_node_executes_and_appends_results(mock_run_tool):
     assert tool_result_msg["content"][0] == {
         "type": "tool_result", "tool_use_id": "tu_1", "content": json.dumps({"products": []})
     }
+
+
+@patch("graph.agent.run_tool")
+def test_tools_node_captures_last_search_results(mock_run_tool):
+    from graph import tools_node
+    mock_run_tool.return_value = json.dumps({"products": [{"title": "Laptop"}]})
+    state = empty_state(
+        pending_tool_calls=[{"name": "search_amazon", "id": "tu_1",
+                               "input": {"query": "laptop", "optimize_for": "price", "max_results": 5}}],
+        trace_id="trace-1",
+    )
+
+    result = tools_node(state)
+
+    assert result["last_search_results"] == {"products": [{"title": "Laptop"}]}
 
 
 def test_route_after_agent_to_tools_when_pending():
