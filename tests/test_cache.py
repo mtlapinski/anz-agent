@@ -51,3 +51,46 @@ def test_store_gracefully_handles_unreachable_db(monkeypatch, tmp_path):
 
     # Should not raise an exception, even though DB is unreachable
     store("test query", [{"title": "test"}])
+
+
+from unittest.mock import patch
+
+
+def test_lookup_uses_judge_for_fuzzy_match():
+    from tools.cache import store, lookup
+    store("purple balance beam", [{"title": "Purple Beam"}])
+
+    with patch("tools.cache_judge.find_match", return_value="purple balance beam"):
+        result = lookup("balance beam")
+
+    assert result == [{"title": "Purple Beam"}]
+
+
+def test_lookup_returns_none_when_judge_finds_no_match():
+    from tools.cache import store, lookup
+    store("yoga mat", [{"title": "Mat"}])
+
+    with patch("tools.cache_judge.find_match", return_value=None):
+        result = lookup("kettlebell")
+
+    assert result is None
+
+
+def test_lookup_does_not_call_judge_when_cache_empty():
+    from tools.cache import lookup
+
+    with patch("tools.cache_judge.find_match") as mock_find_match:
+        result = lookup("anything")
+
+    assert result is None
+    mock_find_match.assert_not_called()
+
+
+def test_lookup_returns_none_when_judge_raises():
+    from tools.cache import store, lookup
+    store("yoga mat", [{"title": "Mat"}])
+
+    with patch("tools.cache_judge.find_match", side_effect=Exception("boom")):
+        result = lookup("kettlebell")
+
+    assert result is None

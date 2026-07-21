@@ -5,6 +5,8 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 
+from tools import cache_judge
+
 DB_PATH = os.path.expanduser("~/.anz-agent/cache.db")
 
 
@@ -41,7 +43,19 @@ def lookup(query: str) -> list[dict] | None:
             ).fetchone()
             if row:
                 return json.loads(row[0])
-            return None
+
+            candidates = [r[0] for r in conn.execute("SELECT DISTINCT query FROM searches").fetchall()]
+            if not candidates:
+                return None
+
+            matched_query = cache_judge.find_match(query, candidates)
+            if matched_query is None:
+                return None
+
+            row = conn.execute(
+                "SELECT raw_results FROM searches WHERE query = ?", (matched_query,)
+            ).fetchone()
+            return json.loads(row[0]) if row else None
         finally:
             conn.close()
     except Exception:
