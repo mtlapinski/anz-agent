@@ -109,6 +109,7 @@ def _complete_google(client, model_name: str, system: str, tools: list[dict], me
                 "name": part.function_call.name,
                 "id": f"google_{part.function_call.name}",
                 "input": dict(part.function_call.args),
+                "thought_signature": part.thought_signature,
             })
 
     if tool_calls:
@@ -143,7 +144,10 @@ def _anthropic_messages_to_google(messages: list[dict]) -> list[dict]:
                 if btype == "text":
                     parts.append({"text": block["text"]})
                 elif btype == "tool_use":
-                    parts.append({"function_call": {"name": block["name"], "args": block["input"]}})
+                    part = {"function_call": {"name": block["name"], "args": block["input"]}}
+                    if block.get("thought_signature"):
+                        part["thought_signature"] = block["thought_signature"]
+                    parts.append(part)
                 elif btype == "tool_result":
                     raw = block["content"]
                     if isinstance(raw, str):
