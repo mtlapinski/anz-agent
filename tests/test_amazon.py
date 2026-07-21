@@ -10,6 +10,7 @@ def make_mock_result(
     reviews=1234,
     delivery="FREE delivery",
     link="https://www.amazon.com/dp/B001TEST",
+    thumbnail="https://example.com/thumb.jpg",
 ):
     return {
         "title": title,
@@ -18,6 +19,7 @@ def make_mock_result(
         "reviews": reviews,
         "delivery": delivery,
         "link": link,
+        "thumbnail": thumbnail,
     }
 
 
@@ -124,3 +126,29 @@ def test_search_excludes_unpriced_items_when_max_price_set(mock_search_class):
     titles = [p["title"] for p in result["products"]]
     assert "Priced Laptop" in titles
     assert "Unpriced Laptop" not in titles
+
+
+@patch.dict(os.environ, {"SERPAPI_KEY": "fake_key"})
+@patch("tools.amazon.GoogleSearch")
+def test_search_includes_image_field(mock_search_class):
+    mock_search_class.return_value.get_dict.return_value = {
+        "organic_results": [make_mock_result(thumbnail="https://example.com/thumb.jpg")]
+    }
+
+    from tools.amazon import search_amazon
+    result = search_amazon(query="laptop", optimize_for="price", max_results=5)
+
+    assert result["products"][0]["image"] == "https://example.com/thumb.jpg"
+
+
+@patch.dict(os.environ, {"SERPAPI_KEY": "fake_key"})
+@patch("tools.amazon.GoogleSearch")
+def test_search_image_field_none_when_missing(mock_search_class):
+    mock_search_class.return_value.get_dict.return_value = {
+        "organic_results": [make_mock_result(thumbnail=None)]
+    }
+
+    from tools.amazon import search_amazon
+    result = search_amazon(query="laptop", optimize_for="price", max_results=5)
+
+    assert result["products"][0]["image"] is None

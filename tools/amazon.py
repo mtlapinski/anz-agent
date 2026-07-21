@@ -47,6 +47,7 @@ def search_amazon(
             "review_count": item.get("reviews"),
             "prime": _has_free_delivery(item.get("delivery")),
             "url": item.get("link"),
+            "image": item.get("thumbnail"),
         })
 
         if len(products) >= max_results:
