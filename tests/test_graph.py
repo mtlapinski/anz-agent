@@ -177,6 +177,21 @@ def test_tools_node_captures_last_search_results(mock_run_tool):
     assert result["last_search_results"] == {"products": [{"title": "Laptop"}]}
 
 
+@patch("graph.agent.run_tool")
+def test_tools_node_missing_data_when_no_search_call(mock_run_tool):
+    from graph import tools_node
+    mock_run_tool.return_value = json.dumps({"result": "some_other_tool_result"})
+    state = empty_state(
+        pending_tool_calls=[{"name": "some_other_tool", "id": "tu_1",
+                               "input": {"param": "value"}}],
+        trace_id="trace-1",
+    )
+
+    result = tools_node(state)
+
+    assert result["last_search_results"] is None
+
+
 def test_route_after_agent_to_tools_when_pending():
     from graph import route_after_agent
     state = empty_state(pending_tool_calls=[{"name": "search_amazon", "id": "tu_1", "input": {}}])
