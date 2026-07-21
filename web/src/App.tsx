@@ -1,6 +1,7 @@
 import { useState } from "react";
 import SessionBar from "./components/SessionBar";
 import ChatPane, { type Message } from "./components/ChatPane";
+import ResultsPanel from "./components/ResultsPanel";
 import { createSession, sendChat, sendResume } from "./api";
 import type { ChatResponse, EvalRequestResponse, Product, ViewType } from "./types";
 
@@ -81,13 +82,7 @@ export default function App() {
         onSend={handleSend}
         onEvalSubmit={handleEvalSubmit}
       />
-      <div className="results-panel">
-        {lastProducts ? (
-          <p>{lastProducts.length} results ({lastView ?? "cards"} view) — ResultsPanel component added in the next task</p>
-        ) : (
-          <p>No search results yet.</p>
-        )}
-      </div>
+      <ResultsPanel products={lastProducts} view={lastView} />
     </div>
   );
 }
