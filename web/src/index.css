@@ -12,6 +12,7 @@
   --color-assistant-bubble: #f1f3f5;
   --color-system-text: #9ca3af;
   --color-danger: #d64545;
+  --color-surface-hover: #f3f5f9;
 
   --space-1: 0.25rem;
   --space-2: 0.5rem;
@@ -180,6 +181,19 @@ body {
   cursor: not-allowed;
 }
 
+.session-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: var(--space-4);
+}
+
+.session-error {
+  color: var(--color-danger);
+}
+
 .session-bar {
   display: flex;
   gap: var(--space-2);
@@ -190,7 +204,6 @@ body {
   border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
   max-width: 400px;
-  margin: 2rem auto;
 }
 
 .session-bar select,
@@ -333,7 +346,7 @@ body {
 }
 
 .product-table th:hover {
-  background-color: #f3f5f9;
+  background-color: var(--color-surface-hover);
 }
 
 .product-table td {
