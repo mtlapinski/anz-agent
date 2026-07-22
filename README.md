@@ -104,12 +104,23 @@ Notes:
 
 | Variable | Required for |
 |---|---|
-| `GOOGLE_API_KEY` | Google provider — [aistudio.google.com](https://aistudio.google.com/app/apikey) |
+| `GOOGLE_API_KEY` | Google provider, and the search cache's fuzzy-match judge (fixed to `gemini-flash-lite-latest` regardless of your selected provider) — [aistudio.google.com](https://aistudio.google.com/app/apikey) |
 | `ANTHROPIC_API_KEY` | Anthropic provider — [console.anthropic.com](https://console.anthropic.com) |
 | `SERPAPI_KEY` | Always — [serpapi.com](https://serpapi.com) (100 free searches/month) |
 | `LANGFUSE_PUBLIC_KEY` | No — optional observability |
 | `LANGFUSE_SECRET_KEY` | No — optional observability |
 | `LANGFUSE_HOST` | No — defaults to Langfuse cloud |
+
+## Search cache
+
+`search_amazon` caches results locally in `~/.anz-agent/cache.db` (SQLite) to
+conserve the SerpAPI free-tier quota. An exact reworded/reordered query
+(e.g. "balance beam purple" vs. "purple balance beam") reuses the cache
+directly; other queries are checked against past searches by a small LLM
+judge (`tools/cache_judge.py`) that decides if a prior search is a close
+enough match to reuse (e.g. "balance beam" reusing "purple balance beam"
+results). Entries never expire — delete `~/.anz-agent/cache.db` to clear
+the cache manually.
 
 ## Models
 
@@ -129,10 +140,16 @@ anz-agent/
 ├── agent.py         # LLM prompt/tools, Langfuse tracing, eval scoring
 ├── server.py        # FastAPI backend for the web UI — /session, /chat, /resume
 ├── tools/
-│   └── amazon.py    # SerpAPI search tool
+│   ├── amazon.py       # SerpAPI search tool, checks the local cache first
+│   ├── cache.py         # SQLite-backed search result cache (~/.anz-agent/cache.db)
+│   └── cache_judge.py   # LLM subagent that fuzzy-matches queries against the cache
 ├── web/              # Vite/React/TypeScript frontend for the web UI
 ├── tests/
 ├── evals/           # scores.jsonl — eval ratings (gitignored)
 ├── .env.example
 └── requirements.txt
 ```
+
+## Backlog
+
+Deferred work items live in [docs/BACKLOG.md](docs/BACKLOG.md).
