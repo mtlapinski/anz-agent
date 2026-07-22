@@ -75,14 +75,16 @@ export default function App() {
 
   return (
     <div className="app">
-      <ChatPane
-        messages={messages}
-        pendingEval={pendingEval}
-        loading={loading}
-        onSend={handleSend}
-        onEvalSubmit={handleEvalSubmit}
-      />
-      <ResultsPanel products={lastProducts} view={lastView} />
+      <div className="panes-container">
+        <ChatPane
+          messages={messages}
+          pendingEval={pendingEval}
+          loading={loading}
+          onSend={handleSend}
+          onEvalSubmit={handleEvalSubmit}
+        />
+        <ResultsPanel products={lastProducts} view={lastView} />
+      </div>
     </div>
   );
 }
