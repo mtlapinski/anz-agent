@@ -37,7 +37,7 @@ export default function ChatPane({ messages, pendingEval, loading, onSend, onEva
           )}
         </div>
       ))}
-      {pendingEval && <EvalWidget recommendation={pendingEval.recommendation} onSubmit={onEvalSubmit} />}
+      {pendingEval && <EvalWidget onSubmit={onEvalSubmit} />}
       <div className="chat-input">
         <input
           value={input}

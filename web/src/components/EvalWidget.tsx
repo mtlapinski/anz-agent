@@ -1,17 +1,15 @@
 import { useState } from "react";
 
 interface Props {
-  recommendation: string;
   onSubmit: (score: number, note?: string) => void;
 }
 
-export default function EvalWidget({ recommendation, onSubmit }: Props) {
+export default function EvalWidget({ onSubmit }: Props) {
   const [score, setScore] = useState(5);
   const [note, setNote] = useState("");
 
   return (
     <div className="eval-widget">
-      <p>{recommendation}</p>
       <label>Rate usefulness (1-5):</label>
       <select value={score} onChange={(e) => setScore(Number(e.target.value))}>
         {[1, 2, 3, 4, 5].map((n) => (
