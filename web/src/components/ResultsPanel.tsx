@@ -11,7 +11,7 @@ interface Props {
 export default function ResultsPanel({ products, view }: Props) {
   if (!products || products.length === 0) {
     return (
-      <div>
+      <div className="results-panel">
         <div className="pane-header">Results</div>
         <div className="results-empty">No search results yet.</div>
       </div>
@@ -21,7 +21,7 @@ export default function ResultsPanel({ products, view }: Props) {
   const effectiveView = view ?? "cards";
 
   return (
-    <div>
+    <div className="results-panel">
       <div className="pane-header">Results</div>
       {effectiveView === "table" && <TableView products={products} />}
       {effectiveView === "chart" && <ChartView products={products} />}
