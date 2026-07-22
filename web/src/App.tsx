@@ -64,10 +64,10 @@ export default function App() {
   if (!threadId) {
     return (
       <div className="app">
-        <div>
+        <div className="session-screen">
           <h1>Amazon Shopping Agent</h1>
           <SessionBar onStart={handleStart} />
-          {sessionError && <p style={{ color: "red" }}>{sessionError}</p>}
+          {sessionError && <p className="session-error">{sessionError}</p>}
         </div>
       </div>
     );
@@ -75,14 +75,16 @@ export default function App() {
 
   return (
     <div className="app">
-      <ChatPane
-        messages={messages}
-        pendingEval={pendingEval}
-        loading={loading}
-        onSend={handleSend}
-        onEvalSubmit={handleEvalSubmit}
-      />
-      <ResultsPanel products={lastProducts} view={lastView} />
+      <div className="panes-container">
+        <ChatPane
+          messages={messages}
+          pendingEval={pendingEval}
+          loading={loading}
+          onSend={handleSend}
+          onEvalSubmit={handleEvalSubmit}
+        />
+        <ResultsPanel products={lastProducts} view={lastView} />
+      </div>
     </div>
   );
 }

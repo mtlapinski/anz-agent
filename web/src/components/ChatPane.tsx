@@ -1,4 +1,5 @@
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
 import EvalWidget from "./EvalWidget";
 import type { EvalRequestResponse } from "../types";
 
@@ -26,10 +27,17 @@ export default function ChatPane({ messages, pendingEval, loading, onSend, onEva
 
   return (
     <div className="chat-pane">
+      <div className="pane-header">Chat</div>
       {messages.map((m, i) => (
-        <div key={i} className={`message ${m.role}`}>{m.text}</div>
+        <div key={i} className={`message ${m.role}`}>
+          {m.role === "user" ? (
+            m.text
+          ) : (
+            <ReactMarkdown>{m.text}</ReactMarkdown>
+          )}
+        </div>
       ))}
-      {pendingEval && <EvalWidget recommendation={pendingEval.recommendation} onSubmit={onEvalSubmit} />}
+      {pendingEval && <EvalWidget onSubmit={onEvalSubmit} />}
       <div className="chat-input">
         <input
           value={input}

@@ -24,7 +24,7 @@ export default function SessionBar({ onStart }: Props) {
         <option value="google">Google</option>
         <option value="anthropic">Anthropic</option>
       </select>
-      <input value={model} onChange={(e) => setModel(e.target.value)} />
+      <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Model" />
       <button onClick={() => onStart(provider, model)}>Start</button>
     </div>
   );
