@@ -8,6 +8,7 @@ def search_amazon(
     optimize_for: str,
     max_results: int = 5,
     max_price: Optional[float] = None,
+    view: Optional[str] = None,
 ) -> dict:
     """
     Search Amazon via SerpAPI. optimize_for is passed through from the agent
