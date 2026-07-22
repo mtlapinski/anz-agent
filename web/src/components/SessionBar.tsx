@@ -19,13 +19,15 @@ export default function SessionBar({ onStart }: Props) {
   }
 
   return (
-    <div className="session-bar">
-      <select value={provider} onChange={(e) => handleProviderChange(e.target.value)}>
-        <option value="google">Google</option>
-        <option value="anthropic">Anthropic</option>
-      </select>
-      <input value={model} onChange={(e) => setModel(e.target.value)} />
-      <button onClick={() => onStart(provider, model)}>Start</button>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh" }}>
+      <div className="session-bar">
+        <select value={provider} onChange={(e) => handleProviderChange(e.target.value)}>
+          <option value="google">Google</option>
+          <option value="anthropic">Anthropic</option>
+        </select>
+        <input value={model} onChange={(e) => setModel(e.target.value)} placeholder="Model" />
+        <button onClick={() => onStart(provider, model)}>Start</button>
+      </div>
     </div>
   );
 }
