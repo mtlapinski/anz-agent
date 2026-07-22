@@ -24,14 +24,14 @@ export default function ChartView({ products }: { products: Product[] }) {
             if (!active || !payload || !payload.length) return null;
             const p = payload[0].payload as ChartPoint;
             return (
-              <div style={{ background: "white", border: "1px solid #ccc", padding: "0.5rem" }}>
+              <div style={{ background: "var(--color-bg)", border: "1px solid var(--color-border)", padding: "var(--space-2)", borderRadius: "var(--radius-sm)" }}>
                 <div>{p.title}</div>
                 <div>${p.price.toFixed(2)} — {p.rating}★</div>
               </div>
             );
           }}
         />
-        <Scatter data={data} fill="#8884d8" />
+        <Scatter data={data} fill="var(--color-accent)" />
       </ScatterChart>
     </ResponsiveContainer>
   );
