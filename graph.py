@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Annotated, Any, TypedDict
+import json
 
 import agent
 import llm
@@ -21,6 +22,7 @@ class GraphState(TypedDict):
     made_tool_call_this_turn: bool
     pending_tool_calls: list | None
     last_search_input: dict | None
+    last_search_results: dict | None
     trace_id: str | None
     response: str | None
 
@@ -114,10 +116,17 @@ def agent_node(state: GraphState, runtime) -> dict:
 def tools_node(state: GraphState) -> dict:
     trace_id = state.get("trace_id")
     tool_results = []
+    last_search_results = state.get("last_search_results")
     for tc in state["pending_tool_calls"]:
         result = agent.run_tool(tc["name"], tc["input"], trace_id=trace_id)
         tool_results.append({"type": "tool_result", "tool_use_id": tc["id"], "content": result})
-    return {"history": [{"role": "user", "content": tool_results}], "pending_tool_calls": None}
+        if tc["name"] == "search_amazon":
+            last_search_results = json.loads(result)
+    return {
+        "history": [{"role": "user", "content": tool_results}],
+        "pending_tool_calls": None,
+        "last_search_results": last_search_results,
+    }
 
 
 def route_after_agent(state: GraphState) -> str:

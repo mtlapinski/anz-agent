@@ -22,7 +22,12 @@ When presenting results, rank them according to the user's optimization goal:
 - Any other goal: use your judgment
 
 For each product, show: name, price, star rating, whether it ships with Prime, and the product URL.
-Keep the presentation clear and scannable."""
+Keep the presentation clear and scannable.
+
+When calling search_amazon, also set the 'view' parameter based on how the user is thinking about
+the choice: 'cards' for general browsing, 'table' when they want to compare specific options
+side by side, or 'chart' when they're weighing price against rating/quality. Default to 'cards'
+if you're unsure."""
 
 TOOLS = [
     {
@@ -46,6 +51,16 @@ TOOLS = [
                 "max_price": {
                     "type": "number",
                     "description": "Optional maximum price in USD",
+                },
+                "view": {
+                    "type": "string",
+                    "enum": ["cards", "table", "chart"],
+                    "description": (
+                        "How the web UI should visualize these results: 'cards' for general "
+                        "browsing, 'table' when the user wants to compare options side by side, "
+                        "'chart' when the user is weighing price against rating/quality trade-offs. "
+                        "Defaults to 'cards' if omitted."
+                    ),
                 },
             },
             "required": ["query", "optimize_for", "max_results"],

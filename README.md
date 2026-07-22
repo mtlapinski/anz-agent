@@ -70,6 +70,36 @@ Press Enter to accept the defaults. Type `/model` at any time to switch mid-sess
 
 Token usage is printed after each LLM call. Type `quit` or `exit` to stop.
 
+## Web UI
+
+An alternative to the CLI: a local web UI with a chat pane and a results panel that
+visualizes search results as cards, a sortable table, or a price/rating chart —
+whichever the agent judges best for the query.
+
+Run the backend and frontend in two terminals:
+
+```bash
+python server.py
+```
+
+```bash
+cd web
+npm install   # first time only
+npm run dev
+```
+
+Open the URL Vite prints (typically `http://localhost:5173`). Choose a provider/model
+and click **Start** — this mirrors the CLI's startup prompt and requires the same
+environment variables (see Configuration below).
+
+Notes:
+- The web UI does not support switching models mid-session (use the CLI's `/model`
+  command for that).
+- Responses are not streamed — the chat pane shows the full reply once the agent
+  finishes, same latency profile as the CLI.
+- Sessions live only in the running `server.py` process's memory; restarting it
+  invalidates all open sessions (same `MemorySaver` limitation the CLI has).
+
 ## Configuration
 
 | Variable | Required for |
@@ -108,10 +138,12 @@ anz-agent/
 ├── main.py          # CLI entry point — drives the graph, handles eval prompts
 ├── graph.py         # LangGraph StateGraph — agent/tools/eval nodes
 ├── agent.py         # LLM prompt/tools, Langfuse tracing, eval scoring
+├── server.py        # FastAPI backend for the web UI — /session, /chat, /resume
 ├── tools/
 │   ├── amazon.py       # SerpAPI search tool, checks the local cache first
 │   ├── cache.py         # SQLite-backed search result cache (~/.anz-agent/cache.db)
 │   └── cache_judge.py   # LLM subagent that fuzzy-matches queries against the cache
+├── web/              # Vite/React/TypeScript frontend for the web UI
 ├── tests/
 ├── evals/           # scores.jsonl — eval ratings (gitignored)
 ├── .env.example

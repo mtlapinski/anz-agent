@@ -167,3 +167,10 @@ def test_record_score_continues_when_jsonl_write_fails(mock_lf, tmp_path, monkey
     score = EvalScore(overall=2, note=None)
 
     record_score(None, {"query": "q", "optimize_for": "price", "recommendation": "r"}, score)  # should not raise
+
+
+def test_search_amazon_tool_schema_has_view_param():
+    from agent import TOOLS
+    schema = TOOLS[0]["input_schema"]
+    assert schema["properties"]["view"]["enum"] == ["cards", "table", "chart"]
+    assert "view" not in schema["required"]

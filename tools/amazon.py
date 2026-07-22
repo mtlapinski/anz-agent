@@ -9,6 +9,7 @@ def search_amazon(
     optimize_for: str,
     max_results: int = 5,
     max_price: Optional[float] = None,
+    view: Optional[str] = None,
 ) -> dict:
     """
     Search Amazon via SerpAPI, via a local cache when available. optimize_for is
@@ -59,6 +60,7 @@ def _build_products(raw_items: list[dict], max_results: int, max_price: Optional
             "review_count": item.get("reviews"),
             "prime": _has_free_delivery(item.get("delivery")),
             "url": item.get("link"),
+            "image": item.get("thumbnail"),
         })
 
         if len(products) >= max_results:
