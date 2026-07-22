@@ -124,3 +124,46 @@ def test_search_excludes_unpriced_items_when_max_price_set(mock_search_class):
     titles = [p["title"] for p in result["products"]]
     assert "Priced Laptop" in titles
     assert "Unpriced Laptop" not in titles
+
+
+@patch.dict(os.environ, {"SERPAPI_KEY": "fake_key"})
+@patch("tools.amazon.GoogleSearch")
+def test_search_returns_cached_results_without_calling_serpapi(mock_search_class):
+    from tools.amazon import search_amazon
+
+    with patch("tools.cache.lookup", return_value=[make_mock_result(title="Cached Laptop")]):
+        result = search_amazon(query="laptop", optimize_for="price", max_results=5)
+
+    mock_search_class.assert_not_called()
+    assert result["products"][0]["title"] == "Cached Laptop"
+
+
+@patch.dict(os.environ, {"SERPAPI_KEY": "fake_key"})
+@patch("tools.amazon.GoogleSearch")
+def test_search_stores_raw_results_after_live_call(mock_search_class):
+    mock_search_class.return_value.get_dict.return_value = {
+        "organic_results": [make_mock_result(title="Fresh Laptop")]
+    }
+
+    from tools.amazon import search_amazon
+
+    with patch("tools.cache.lookup", return_value=None) as mock_lookup, \
+         patch("tools.cache.store") as mock_store:
+        search_amazon(query="laptop", optimize_for="price", max_results=5)
+
+    mock_lookup.assert_called_once_with("laptop")
+    mock_store.assert_called_once_with("laptop", [make_mock_result(title="Fresh Laptop")])
+
+
+@patch.dict(os.environ, {"SERPAPI_KEY": "fake_key"})
+@patch("tools.amazon.GoogleSearch")
+def test_search_does_not_store_on_api_error(mock_search_class):
+    mock_search_class.return_value.get_dict.side_effect = Exception("Rate limit exceeded")
+
+    from tools.amazon import search_amazon
+
+    with patch("tools.cache.lookup", return_value=None), \
+         patch("tools.cache.store") as mock_store:
+        search_amazon(query="laptop", optimize_for="price", max_results=5)
+
+    mock_store.assert_not_called()

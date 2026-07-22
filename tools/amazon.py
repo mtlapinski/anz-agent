@@ -1,6 +1,7 @@
 import os
 from typing import Optional
 from serpapi import GoogleSearch
+from tools import cache
 
 
 def search_amazon(
@@ -10,26 +11,37 @@ def search_amazon(
     max_price: Optional[float] = None,
 ) -> dict:
     """
-    Search Amazon via SerpAPI. optimize_for is passed through from the agent
-    and used by the caller to rank results — not applied here.
+    Search Amazon via SerpAPI, via a local cache when available. optimize_for is
+    passed through from the agent and used by the caller to rank results — not
+    applied here.
     """
-    params = {
-        "engine": "amazon",
-        "k": query,
-        "amazon_domain": "amazon.com",
-        "api_key": os.environ["SERPAPI_KEY"],
-    }
+    raw_items = cache.lookup(query)
 
-    try:
-        results = GoogleSearch(params).get_dict()
-    except Exception as e:
-        return {"error": str(e), "products": []}
+    if raw_items is None:
+        params = {
+            "engine": "amazon",
+            "k": query,
+            "amazon_domain": "amazon.com",
+            "api_key": os.environ["SERPAPI_KEY"],
+        }
 
-    if "error" in results:
-        return {"error": results["error"], "products": []}
+        try:
+            results = GoogleSearch(params).get_dict()
+        except Exception as e:
+            return {"error": str(e), "products": []}
 
+        if "error" in results:
+            return {"error": results["error"], "products": []}
+
+        raw_items = results.get("organic_results") or []
+        cache.store(query, raw_items)
+
+    return {"products": _build_products(raw_items, max_results, max_price)}
+
+
+def _build_products(raw_items: list[dict], max_results: int, max_price: Optional[float]) -> list[dict]:
     products = []
-    for item in (results.get("organic_results") or []):
+    for item in raw_items:
         title = item.get("title")
         if not title:
             continue
@@ -52,7 +64,7 @@ def search_amazon(
         if len(products) >= max_results:
             break
 
-    return {"products": products}
+    return products
 
 
 def _has_free_delivery(delivery) -> bool:
