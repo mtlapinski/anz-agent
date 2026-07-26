@@ -11,15 +11,21 @@ This supersedes the original plan to wait for a larger human-rated dataset befor
 
 ## Architecture
 
-`eval_node` (`graph.py`) changes from a single `interrupt()` call to: judge call → human `interrupt()` → combined `record_score()`.
+**Revision (post-review):** the original design put the judge call inside `eval_node`, before `interrupt()`. LangGraph replays a node from the top on every resume — it doesn't resume mid-function — so anything before an `interrupt()` call re-executes on resume. That made the judge call run twice per turn (once before the human sees the prompt, once again after they answer), doubling judge cost/latency and risking a second-attempt failure silently discarding a first-attempt success. Fixed by splitting the single `eval_node` into two nodes, following the graph's existing one-node-one-responsibility pattern (`agent_node` / `tools_node`):
 
 ```
-eval_node:
+judge_node (new, no interrupt — runs exactly once, LangGraph checkpoints it as a completed step):
   context = {query, optimize_for, recommendation}
   judge_score = judge_recommendation(client, model_config, context)   # try, retry once on failure, else None + console message
-  human_score = interrupt(context)                                    # unchanged — human doesn't see judge_score (avoid anchoring)
-  record_score(trace_id, context, human_score, judge_score)
+  → { judge_score }
+
+eval_node (interrupt only — the only code before interrupt() is building the same context dict, which is pure/side-effect-free and safe to replay):
+  context = {query, optimize_for, recommendation}
+  human_score = interrupt(context)     # human doesn't see judge_score (avoid anchoring)
+  record_score(trace_id, context, human_score, state["judge_score"])
 ```
+
+`judge_score` is carried from `judge_node` to `eval_node` via `GraphState`, the same mechanism already used for `last_search_input`/`last_search_results` between `agent_node` and `tools_node`. Graph edges: `agent` → (conditional) → `judge` → `eval` → `END`, replacing the old `agent` → (conditional) → `eval` → `END`.
 
 The human interrupt prompt is updated to state the scale direction explicitly (1 = poor/unhelpful, 5 = excellent/highly useful), fixing the ambiguity noted in two of the three existing `scores.jsonl` rows.
 
@@ -44,6 +50,8 @@ def judge_recommendation(client, model_config, context: dict) -> JudgeScore | No
 
 Prompt sent to the judge includes `query`, `optimize_for`, and `recommendation`, with the same fixed anchor language used in the human prompt, and asks for structured JSON output (`{"relevance": int, "fit": int, "quality": int, "note": str}`); `overall` is computed locally as the mean, not asked of the model.
 
+**Revision (post-review):** the parser strips a leading/trailing markdown code fence (` ```json ` / ` ``` `) before `json.loads`, matching the normalization already done by the sibling judge `tools/cache_judge.py`. Without this, a model that wraps its JSON in a fence fails deterministically on both the first attempt and the identical retry, burning both attempts on a recoverable formatting quirk rather than a real error.
+
 ### `agent.py` — `record_score()` changes
 
 Signature becomes `record_score(trace_id, context, human_score: EvalScore | None, judge_score: JudgeScore | None) -> None`.
@@ -51,13 +59,12 @@ Signature becomes `record_score(trace_id, context, human_score: EvalScore | None
 - **Langfuse**: existing `usefulness` score (from `human_score`) unchanged; adds four more `create_score()` calls when `judge_score` is not `None`: `judge_relevance`, `judge_fit`, `judge_quality`, `judge_overall`. Each wrapped in the existing try/except-and-continue pattern.
 - **Local JSONL** (`evals/scores.jsonl`): existing fields (`timestamp`, `query`, `optimize_for`, `recommendation`, `overall`, `note`) unchanged; adds `judge_relevance`, `judge_fit`, `judge_quality`, `judge_overall`, `judge_note` — all `None` when the judge failed twice.
 
-### `graph.py` — `eval_node` changes
+### `graph.py` — `judge_node` (new) and `eval_node` changes
 
-- Calls `agent.judge_recommendation(...)` before `interrupt()`, wrapped so a judge exception never blocks the human interrupt from firing.
-- On judge failure after one retry: `print("[judge scoring failed after retry: {err}]")`, continue with `judge_score=None`.
-- Passes both scores to `record_score()`.
-
-No other graph structure changes — same conditional edges, same `route_after_agent` trigger (only fires when a turn produced a recommendation).
+- `judge_node(state, runtime) -> dict`: builds the context dict, calls `agent.judge_recommendation(...)` wrapped so a judge exception never escapes the node, prints a console message on failure (`judge_score is None`, whether from an exception or from `judge_recommendation`'s own retry-exhaustion), returns `{"judge_score": judge_score}`. Runs exactly once — no `interrupt()` in this node, so LangGraph checkpoints it as a completed step and never replays it.
+- `eval_node(state) -> dict`: rebuilds the same context dict, calls `interrupt(context)` for the human score, then `record_score(trace_id, context, human_score, state["judge_score"])`. No longer needs `runtime` — the judge already ran in `judge_node`.
+- `GraphState` gains a `judge_score: "JudgeScore | None"` field, carried from `judge_node` to `eval_node` the same way `last_search_input`/`last_search_results` already carry data between `agent_node` and `tools_node`.
+- `route_after_agent` returns `"judge"` (was `"eval"`) when a turn produced a recommendation. `build_graph()` edges become `agent` → (conditional) → `judge` → `eval` → `END` (previously `agent` → (conditional) → `eval` → `END`).
 
 ## Error Handling
 
