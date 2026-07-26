@@ -169,6 +169,48 @@ def test_record_score_continues_when_jsonl_write_fails(mock_lf, tmp_path, monkey
     record_score(None, {"query": "q", "optimize_for": "price", "recommendation": "r"}, score)  # should not raise
 
 
+@patch("agent.llm")
+def test_judge_recommendation_success(mock_llm):
+    from agent import judge_recommendation, JudgeScore
+    mock_llm.complete.return_value = LLMResponse(
+        text='{"relevance": 5, "fit": 4, "quality": 5, "note": "great match"}',
+        tool_calls=None, input_tokens=50, output_tokens=20,
+    )
+    context = {"query": "laptop", "optimize_for": "price", "recommendation": "Here are 3 laptops..."}
+
+    result = judge_recommendation(MagicMock(), default_config(), context)
+
+    assert result == JudgeScore(relevance=5, fit=4, quality=5, overall=4.7, note="great match")
+
+
+@patch("agent.llm")
+def test_judge_recommendation_retries_once_on_malformed_json(mock_llm):
+    from agent import judge_recommendation
+    mock_llm.complete.side_effect = [
+        LLMResponse(text="not json", tool_calls=None, input_tokens=10, output_tokens=5),
+        LLMResponse(text='{"relevance": 3, "fit": 3, "quality": 3, "note": "ok"}',
+                    tool_calls=None, input_tokens=10, output_tokens=5),
+    ]
+    context = {"query": "q", "optimize_for": "price", "recommendation": "r"}
+
+    result = judge_recommendation(MagicMock(), default_config(), context)
+
+    assert result.overall == 3.0
+    assert mock_llm.complete.call_count == 2
+
+
+@patch("agent.llm")
+def test_judge_recommendation_returns_none_after_two_failures(mock_llm):
+    from agent import judge_recommendation
+    mock_llm.complete.side_effect = Exception("rate limited")
+    context = {"query": "q", "optimize_for": "price", "recommendation": "r"}
+
+    result = judge_recommendation(MagicMock(), default_config(), context)
+
+    assert result is None
+    assert mock_llm.complete.call_count == 2
+
+
 def test_search_amazon_tool_schema_has_view_param():
     from agent import TOOLS
     schema = TOOLS[0]["input_schema"]

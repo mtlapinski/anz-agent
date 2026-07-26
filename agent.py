@@ -113,6 +113,53 @@ class EvalScore:
     criteria: dict[str, int] | None = None
 
 
+@dataclass
+class JudgeScore:
+    relevance: int
+    fit: int
+    quality: int
+    overall: float
+    note: str
+
+
+JUDGE_SYSTEM_PROMPT = (
+    "You are an impartial judge evaluating an Amazon shopping assistant's product "
+    "recommendation. Score it on three criteria, each on a 1-5 scale:\n"
+    "- relevance: how well the recommended products match the search query "
+    "(1 = poor match, 5 = excellent match)\n"
+    "- fit: how well the recommendation matches the user's stated optimization goal "
+    "(1 = ignores the goal, 5 = perfectly matches it)\n"
+    "- quality: how clear and complete the presentation is "
+    "(1 = unclear or incomplete, 5 = clear and complete)\n\n"
+    "Respond with ONLY a JSON object in this exact form, no other text:\n"
+    '{"relevance": <int 1-5>, "fit": <int 1-5>, "quality": <int 1-5>, "note": "<short rationale>"}'
+)
+
+
+def judge_recommendation(client, model_config: ModelConfig, context: dict) -> "JudgeScore | None":
+    user_message = (
+        f"Query: {context.get('query', '')}\n"
+        f"Optimize for: {context.get('optimize_for', '')}\n"
+        f"Recommendation:\n{context.get('recommendation', '')}"
+    )
+    messages = [{"role": "user", "content": user_message}]
+
+    for attempt in range(2):
+        try:
+            response = llm.complete(client, model_config, JUDGE_SYSTEM_PROMPT, [], messages)
+            data = json.loads(response.text)
+            relevance = int(data["relevance"])
+            fit = int(data["fit"])
+            quality = int(data["quality"])
+            note = str(data.get("note", ""))
+            overall = round((relevance + fit + quality) / 3, 1)
+            return JudgeScore(relevance=relevance, fit=fit, quality=quality, overall=overall, note=note)
+        except Exception:
+            if attempt == 1:
+                return None
+    return None
+
+
 def record_score(trace_id: str | None, context: dict, score: "EvalScore | None") -> None:
     if score is None:
         return
