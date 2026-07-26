@@ -211,19 +211,23 @@ def test_route_after_agent_to_end_when_no_tool_call():
     assert route_after_agent(state) == END
 
 
+@patch("graph.agent.judge_recommendation")
 @patch("graph.agent.record_score")
-def test_eval_node_interrupts_then_records_score(mock_record_score):
-    from graph import eval_node
+def test_eval_node_interrupts_then_records_score(mock_record_score, mock_judge):
+    from graph import eval_node, GraphContext
+    from agent import JudgeScore
     from unittest.mock import patch as mock_patch
 
+    mock_judge.return_value = JudgeScore(relevance=5, fit=4, quality=5, overall=4.7, note="great match")
     state = empty_state(
         last_search_input={"query": "laptop", "optimize_for": "price", "max_results": 5},
         response="Here are the top laptops...",
         trace_id="trace-1",
     )
+    runtime = FakeRuntime(GraphContext(client=MagicMock(), model_config=default_config()))
 
     with mock_patch("graph.interrupt", return_value="fake-score") as mock_interrupt:
-        result = eval_node(state)
+        result = eval_node(state, runtime)
 
     mock_interrupt.assert_called_once_with({
         "query": "laptop", "optimize_for": "price", "recommendation": "Here are the top laptops...",
@@ -232,6 +236,60 @@ def test_eval_node_interrupts_then_records_score(mock_record_score):
         "trace-1",
         {"query": "laptop", "optimize_for": "price", "recommendation": "Here are the top laptops..."},
         "fake-score",
+        mock_judge.return_value,
+    )
+    assert result == {}
+
+
+@patch("graph.agent.judge_recommendation")
+@patch("graph.agent.record_score")
+def test_eval_node_continues_when_judge_fails(mock_record_score, mock_judge, capsys):
+    from graph import eval_node, GraphContext
+    from unittest.mock import patch as mock_patch
+
+    mock_judge.return_value = None
+    state = empty_state(
+        last_search_input={"query": "laptop", "optimize_for": "price", "max_results": 5},
+        response="Here are the top laptops...",
+        trace_id="trace-1",
+    )
+    runtime = FakeRuntime(GraphContext(client=MagicMock(), model_config=default_config()))
+
+    with mock_patch("graph.interrupt", return_value="fake-score"):
+        result = eval_node(state, runtime)
+
+    assert "judge scoring failed" in capsys.readouterr().out
+    mock_record_score.assert_called_once_with(
+        "trace-1",
+        {"query": "laptop", "optimize_for": "price", "recommendation": "Here are the top laptops..."},
+        "fake-score",
+        None,
+    )
+    assert result == {}
+
+
+@patch("graph.agent.judge_recommendation")
+@patch("graph.agent.record_score")
+def test_eval_node_continues_when_judge_raises(mock_record_score, mock_judge):
+    from graph import eval_node, GraphContext
+    from unittest.mock import patch as mock_patch
+
+    mock_judge.side_effect = Exception("boom")
+    state = empty_state(
+        last_search_input={"query": "laptop", "optimize_for": "price", "max_results": 5},
+        response="Here are the top laptops...",
+        trace_id="trace-1",
+    )
+    runtime = FakeRuntime(GraphContext(client=MagicMock(), model_config=default_config()))
+
+    with mock_patch("graph.interrupt", return_value="fake-score"):
+        result = eval_node(state, runtime)
+
+    mock_record_score.assert_called_once_with(
+        "trace-1",
+        {"query": "laptop", "optimize_for": "price", "recommendation": "Here are the top laptops..."},
+        "fake-score",
+        None,
     )
     assert result == {}
 
@@ -254,8 +312,12 @@ def test_build_graph_full_flow_with_recommendation(mock_llm, mock_lf):
     config = {"configurable": {"thread_id": "t-full-flow"}}
     context = GraphContext(client=MagicMock(), model_config=default_config())
 
-    with patch("graph.agent.run_tool") as mock_run_tool, patch("graph.agent.record_score") as mock_record_score:
+    with patch("graph.agent.run_tool") as mock_run_tool, \
+         patch("graph.agent.record_score") as mock_record_score, \
+         patch("graph.agent.judge_recommendation") as mock_judge:
         mock_run_tool.return_value = json.dumps({"products": []})
+        from agent import JudgeScore
+        mock_judge.return_value = JudgeScore(relevance=5, fit=5, quality=5, overall=5.0, note="great")
         result = graph.invoke({"new_message": "Find me a laptop"}, config=config, context=context)
 
         assert "__interrupt__" in result
@@ -270,6 +332,7 @@ def test_build_graph_full_flow_with_recommendation(mock_llm, mock_lf):
     assert final["response"] == "Here are the top laptops..."
     mock_record_score.assert_called_once()
     assert mock_record_score.call_args.args[2].overall == 5
+    assert mock_record_score.call_args.args[3].overall == 5.0
 
 
 @patch("graph.agent._get_langfuse")

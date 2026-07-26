@@ -137,15 +137,21 @@ def route_after_agent(state: GraphState) -> str:
     return END
 
 
-def eval_node(state: GraphState) -> dict:
+def eval_node(state: GraphState, runtime) -> dict:
     search_input = state.get("last_search_input") or {}
     context = {
         "query": search_input.get("query", ""),
         "optimize_for": search_input.get("optimize_for", ""),
         "recommendation": state.get("response", ""),
     }
-    score = interrupt(context)
-    agent.record_score(state.get("trace_id"), context, score)
+    try:
+        judge_score = agent.judge_recommendation(runtime.context.client, runtime.context.model_config, context)
+    except Exception:
+        judge_score = None
+    if judge_score is None:
+        print("[judge scoring failed after retry, continuing without judge score]")
+    human_score = interrupt(context)
+    agent.record_score(state.get("trace_id"), context, human_score, judge_score)
     return {}
 
 
