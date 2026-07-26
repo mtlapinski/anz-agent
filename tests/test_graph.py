@@ -335,6 +335,7 @@ def test_build_graph_full_flow_with_recommendation(mock_llm, mock_lf):
 
     assert final["response"] == "Here are the top laptops..."
     mock_record_score.assert_called_once()
+    mock_judge.assert_called_once()
     assert mock_record_score.call_args.args[2].overall == 5
     assert mock_record_score.call_args.args[3].overall == 5.0
 
