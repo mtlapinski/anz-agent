@@ -42,7 +42,7 @@ def check_credentials(config: ModelConfig) -> None:
 
 def prompt_for_score() -> EvalScore | None:
     while True:
-        print("Rate usefulness (1-5): ", end="", flush=True)
+        print("Rate usefulness (1-5, 1=poor/unhelpful, 5=excellent/highly useful): ", end="", flush=True)
         try:
             raw = input().strip()
         except (EOFError, KeyboardInterrupt):

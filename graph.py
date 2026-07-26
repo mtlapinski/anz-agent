@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Annotated, Any, TypedDict
 import json
 
@@ -25,6 +25,7 @@ class GraphState(TypedDict):
     last_search_results: dict | None
     trace_id: str | None
     response: str | None
+    judge_score: "dict | None"
 
 
 @dataclass
@@ -133,19 +134,36 @@ def route_after_agent(state: GraphState) -> str:
     if state.get("pending_tool_calls"):
         return "tools"
     if state.get("made_tool_call_this_turn"):
-        return "eval"
+        return "judge"
     return END
 
 
-def eval_node(state: GraphState) -> dict:
+def _eval_context(state: GraphState) -> dict:
     search_input = state.get("last_search_input") or {}
-    context = {
+    return {
         "query": search_input.get("query", ""),
         "optimize_for": search_input.get("optimize_for", ""),
         "recommendation": state.get("response", ""),
     }
-    score = interrupt(context)
-    agent.record_score(state.get("trace_id"), context, score)
+
+
+def judge_node(state: GraphState, runtime) -> dict:
+    context = _eval_context(state)
+    try:
+        judge_score = agent.judge_recommendation(runtime.context.client, runtime.context.model_config, context)
+    except Exception:
+        judge_score = None
+    if judge_score is None:
+        print("[judge scoring failed after retry, continuing without judge score]")
+    return {"judge_score": asdict(judge_score) if judge_score is not None else None}
+
+
+def eval_node(state: GraphState) -> dict:
+    context = _eval_context(state)
+    human_score = interrupt(context)
+    judge_dict = state.get("judge_score")
+    judge_score = agent.JudgeScore(**judge_dict) if judge_dict is not None else None
+    agent.record_score(state.get("trace_id"), context, human_score, judge_score)
     return {}
 
 
@@ -153,9 +171,11 @@ def build_graph():
     builder = StateGraph(GraphState, context_schema=GraphContext)
     builder.add_node("agent", agent_node)
     builder.add_node("tools", tools_node)
+    builder.add_node("judge", judge_node)
     builder.add_node("eval", eval_node)
     builder.add_edge(START, "agent")
-    builder.add_conditional_edges("agent", route_after_agent, {"tools": "tools", "eval": "eval", END: END})
+    builder.add_conditional_edges("agent", route_after_agent, {"tools": "tools", "judge": "judge", END: END})
     builder.add_edge("tools", "agent")
+    builder.add_edge("judge", "eval")
     builder.add_edge("eval", END)
     return builder.compile(checkpointer=MemorySaver())

@@ -17,6 +17,7 @@ def empty_state(**overrides):
         "last_search_results": None,
         "trace_id": None,
         "response": None,
+        "judge_score": None,
     }
     base.update(overrides)
     return base
@@ -198,10 +199,10 @@ def test_route_after_agent_to_tools_when_pending():
     assert route_after_agent(state) == "tools"
 
 
-def test_route_after_agent_to_eval_when_recommendation_made():
+def test_route_after_agent_to_judge_when_recommendation_made():
     from graph import route_after_agent
     state = empty_state(pending_tool_calls=None, made_tool_call_this_turn=True, response="Here are...")
-    assert route_after_agent(state) == "eval"
+    assert route_after_agent(state) == "judge"
 
 
 def test_route_after_agent_to_end_when_no_tool_call():
@@ -211,15 +212,78 @@ def test_route_after_agent_to_end_when_no_tool_call():
     assert route_after_agent(state) == END
 
 
-@patch("graph.agent.record_score")
-def test_eval_node_interrupts_then_records_score(mock_record_score):
-    from graph import eval_node
-    from unittest.mock import patch as mock_patch
+@patch("graph.agent.judge_recommendation")
+def test_judge_node_calls_judge_and_returns_score(mock_judge):
+    from graph import judge_node, GraphContext
+    from agent import JudgeScore
 
+    mock_judge.return_value = JudgeScore(relevance=5, fit=4, quality=5, overall=4.7, note="great match")
     state = empty_state(
         last_search_input={"query": "laptop", "optimize_for": "price", "max_results": 5},
         response="Here are the top laptops...",
         trace_id="trace-1",
+    )
+    runtime = FakeRuntime(GraphContext(client=MagicMock(), model_config=default_config()))
+
+    result = judge_node(state, runtime)
+
+    mock_judge.assert_called_once_with(runtime.context.client, runtime.context.model_config, {
+        "query": "laptop", "optimize_for": "price", "recommendation": "Here are the top laptops...",
+    })
+    assert result == {"judge_score": {
+        "relevance": 5, "fit": 4, "quality": 5, "overall": 4.7, "note": "great match",
+    }}
+
+
+@patch("graph.agent.judge_recommendation")
+def test_judge_node_continues_when_judge_fails(mock_judge, capsys):
+    from graph import judge_node, GraphContext
+
+    mock_judge.return_value = None
+    state = empty_state(
+        last_search_input={"query": "laptop", "optimize_for": "price", "max_results": 5},
+        response="Here are the top laptops...",
+        trace_id="trace-1",
+    )
+    runtime = FakeRuntime(GraphContext(client=MagicMock(), model_config=default_config()))
+
+    result = judge_node(state, runtime)
+
+    assert "judge scoring failed" in capsys.readouterr().out
+    assert result == {"judge_score": None}
+
+
+@patch("graph.agent.judge_recommendation")
+def test_judge_node_continues_when_judge_raises(mock_judge, capsys):
+    from graph import judge_node, GraphContext
+
+    mock_judge.side_effect = Exception("boom")
+    state = empty_state(
+        last_search_input={"query": "laptop", "optimize_for": "price", "max_results": 5},
+        response="Here are the top laptops...",
+        trace_id="trace-1",
+    )
+    runtime = FakeRuntime(GraphContext(client=MagicMock(), model_config=default_config()))
+
+    result = judge_node(state, runtime)
+
+    assert "judge scoring failed" in capsys.readouterr().out
+    assert result == {"judge_score": None}
+
+
+@patch("graph.agent.record_score")
+def test_eval_node_interrupts_then_records_score_using_judge_from_state(mock_record_score):
+    from graph import eval_node
+    from agent import JudgeScore
+    from dataclasses import asdict
+    from unittest.mock import patch as mock_patch
+
+    judge_score = JudgeScore(relevance=5, fit=4, quality=5, overall=4.7, note="great match")
+    state = empty_state(
+        last_search_input={"query": "laptop", "optimize_for": "price", "max_results": 5},
+        response="Here are the top laptops...",
+        trace_id="trace-1",
+        judge_score=asdict(judge_score),
     )
 
     with mock_patch("graph.interrupt", return_value="fake-score") as mock_interrupt:
@@ -232,6 +296,7 @@ def test_eval_node_interrupts_then_records_score(mock_record_score):
         "trace-1",
         {"query": "laptop", "optimize_for": "price", "recommendation": "Here are the top laptops..."},
         "fake-score",
+        judge_score,
     )
     assert result == {}
 
@@ -254,8 +319,12 @@ def test_build_graph_full_flow_with_recommendation(mock_llm, mock_lf):
     config = {"configurable": {"thread_id": "t-full-flow"}}
     context = GraphContext(client=MagicMock(), model_config=default_config())
 
-    with patch("graph.agent.run_tool") as mock_run_tool, patch("graph.agent.record_score") as mock_record_score:
+    with patch("graph.agent.run_tool") as mock_run_tool, \
+         patch("graph.agent.record_score") as mock_record_score, \
+         patch("graph.agent.judge_recommendation") as mock_judge:
         mock_run_tool.return_value = json.dumps({"products": []})
+        from agent import JudgeScore
+        mock_judge.return_value = JudgeScore(relevance=5, fit=5, quality=5, overall=5.0, note="great")
         result = graph.invoke({"new_message": "Find me a laptop"}, config=config, context=context)
 
         assert "__interrupt__" in result
@@ -269,7 +338,9 @@ def test_build_graph_full_flow_with_recommendation(mock_llm, mock_lf):
 
     assert final["response"] == "Here are the top laptops..."
     mock_record_score.assert_called_once()
+    mock_judge.assert_called_once()
     assert mock_record_score.call_args.args[2].overall == 5
+    assert mock_record_score.call_args.args[3].overall == 5.0
 
 
 @patch("graph.agent._get_langfuse")
@@ -290,3 +361,43 @@ def test_build_graph_skips_eval_when_no_tool_call(mock_llm, mock_lf):
 
     assert "__interrupt__" not in result
     assert result["response"] == "What are you looking for?"
+
+
+@patch("graph.agent._get_langfuse")
+@patch("graph.llm")
+def test_build_graph_resume_does_not_warn_on_checkpoint_deserialization(mock_llm, mock_lf, caplog):
+    """Regression test: judge_score must be stored as a plain dict in GraphState,
+    not a JudgeScore dataclass instance, otherwise LangGraph's checkpointer logs
+    'Deserializing unregistered type ... This will be blocked in a future version'
+    when resuming from a checkpoint (and will eventually break resume entirely).
+    """
+    import logging
+    from graph import build_graph, GraphContext
+    from langgraph.types import Command
+
+    mock_llm.complete.side_effect = [
+        LLMResponse(text=None, tool_calls=[{"name": "search_amazon", "id": "tu_1",
+            "input": {"query": "laptop", "optimize_for": "price", "max_results": 5}}],
+            input_tokens=80, output_tokens=20),
+        LLMResponse(text="Here are the top laptops...", tool_calls=None, input_tokens=200, output_tokens=50),
+    ]
+    mock_lf.return_value.create_trace_id.return_value = "trace-3"
+
+    graph = build_graph()
+    config = {"configurable": {"thread_id": "t-no-warn"}}
+    context = GraphContext(client=MagicMock(), model_config=default_config())
+
+    with patch("graph.agent.run_tool") as mock_run_tool, \
+         patch("graph.agent.record_score"), \
+         patch("graph.agent.judge_recommendation") as mock_judge:
+        mock_run_tool.return_value = json.dumps({"products": []})
+        from agent import JudgeScore, EvalScore
+        mock_judge.return_value = JudgeScore(relevance=5, fit=5, quality=5, overall=5.0, note="great")
+        graph.invoke({"new_message": "Find me a laptop"}, config=config, context=context)
+
+        score = EvalScore(overall=5, note="great")
+        with caplog.at_level(logging.WARNING):
+            graph.invoke(Command(resume=score), config=config, context=context)
+
+    assert "Deserializing unregistered type" not in caplog.text
+    assert "msgpack" not in caplog.text

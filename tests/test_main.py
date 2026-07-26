@@ -40,6 +40,18 @@ def test_prompt_for_score_ctrl_c_returns_none(monkeypatch):
     assert prompt_for_score() is None
 
 
+def test_prompt_for_score_prints_scale_anchors(monkeypatch, capsys):
+    from main import prompt_for_score
+    inputs = iter(["3", ""])
+    monkeypatch.setattr(builtins, "input", lambda: next(inputs))
+
+    prompt_for_score()
+
+    out = capsys.readouterr().out
+    assert "1=poor/unhelpful" in out
+    assert "5=excellent/highly useful" in out
+
+
 @patch.dict("os.environ", {"ANTHROPIC_API_KEY": "fake"})
 def test_handle_model_command_direct_args_no_history_no_prompt(monkeypatch):
     from main import handle_model_command

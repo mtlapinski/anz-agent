@@ -113,20 +113,96 @@ class EvalScore:
     criteria: dict[str, int] | None = None
 
 
-def record_score(trace_id: str | None, context: dict, score: "EvalScore | None") -> None:
-    if score is None:
+@dataclass
+class JudgeScore:
+    relevance: int
+    fit: int
+    quality: int
+    overall: float
+    note: str
+
+
+JUDGE_SYSTEM_PROMPT = (
+    "You are an impartial judge evaluating an Amazon shopping assistant's product "
+    "recommendation. Score it on three criteria, each on a 1-5 scale:\n"
+    "- relevance: how well the recommended products match the search query "
+    "(1 = poor match, 5 = excellent match)\n"
+    "- fit: how well the recommendation matches the user's stated optimization goal "
+    "(1 = ignores the goal, 5 = perfectly matches it)\n"
+    "- quality: how clear and complete the presentation is "
+    "(1 = unclear or incomplete, 5 = clear and complete)\n\n"
+    "Respond with ONLY a JSON object in this exact form, no other text:\n"
+    '{"relevance": <int 1-5>, "fit": <int 1-5>, "quality": <int 1-5>, "note": "<short rationale>"}'
+)
+
+
+def _strip_json_fence(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
+def judge_recommendation(client, model_config: ModelConfig, context: dict) -> "JudgeScore | None":
+    user_message = (
+        f"Query: {context.get('query', '')}\n"
+        f"Optimize for: {context.get('optimize_for', '')}\n"
+        f"Recommendation:\n{context.get('recommendation', '')}"
+    )
+    messages = [{"role": "user", "content": user_message}]
+
+    for attempt in range(2):
+        try:
+            response = llm.complete(client, model_config, JUDGE_SYSTEM_PROMPT, [], messages)
+            data = json.loads(_strip_json_fence(response.text))
+            relevance = int(data["relevance"])
+            fit = int(data["fit"])
+            quality = int(data["quality"])
+            note = str(data.get("note", ""))
+            overall = round((relevance + fit + quality) / 3, 1)
+            return JudgeScore(relevance=relevance, fit=fit, quality=quality, overall=overall, note=note)
+        except Exception:
+            if attempt == 1:
+                return None
+    return None
+
+
+def record_score(
+    trace_id: str | None,
+    context: dict,
+    human_score: "EvalScore | None",
+    judge_score: "JudgeScore | None" = None,
+) -> None:
+    if human_score is None and judge_score is None:
         return
 
     if trace_id:
-        try:
-            _get_langfuse().create_score(
-                trace_id=trace_id,
-                name="usefulness",
-                value=score.overall,
-                comment=score.note,
-            )
-        except Exception:
-            pass
+        if human_score is not None:
+            try:
+                _get_langfuse().create_score(
+                    trace_id=trace_id,
+                    name="usefulness",
+                    value=human_score.overall,
+                    comment=human_score.note,
+                )
+            except Exception:
+                pass
+        if judge_score is not None:
+            for name, value, comment in (
+                ("judge_relevance", judge_score.relevance, None),
+                ("judge_fit", judge_score.fit, None),
+                ("judge_quality", judge_score.quality, None),
+                ("judge_overall", judge_score.overall, judge_score.note),
+            ):
+                try:
+                    _get_langfuse().create_score(trace_id=trace_id, name=name, value=value, comment=comment)
+                except Exception:
+                    pass
 
     try:
         os.makedirs("evals", exist_ok=True)
@@ -135,8 +211,13 @@ def record_score(trace_id: str | None, context: dict, score: "EvalScore | None")
             "query": context.get("query", ""),
             "optimize_for": context.get("optimize_for", ""),
             "recommendation": context.get("recommendation", ""),
-            "overall": score.overall,
-            "note": score.note,
+            "overall": human_score.overall if human_score else None,
+            "note": human_score.note if human_score else None,
+            "judge_relevance": judge_score.relevance if judge_score else None,
+            "judge_fit": judge_score.fit if judge_score else None,
+            "judge_quality": judge_score.quality if judge_score else None,
+            "judge_overall": judge_score.overall if judge_score else None,
+            "judge_note": judge_score.note if judge_score else None,
         }
         with open("evals/scores.jsonl", "a") as f:
             f.write(json.dumps(row) + "\n")
