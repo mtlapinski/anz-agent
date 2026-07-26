@@ -11,8 +11,9 @@ def make_mock_result(
     delivery="FREE delivery",
     link="https://www.amazon.com/dp/B001TEST",
     thumbnail="https://example.com/thumb.jpg",
+    sponsored=None,
 ):
-    return {
+    result = {
         "title": title,
         "extracted_price": extracted_price,
         "rating": rating,
@@ -21,6 +22,9 @@ def make_mock_result(
         "link": link,
         "thumbnail": thumbnail,
     }
+    if sponsored is not None:
+        result["sponsored"] = sponsored
+    return result
 
 
 @patch.dict(os.environ, {"SERPAPI_KEY": "fake_key"})
@@ -84,6 +88,23 @@ def test_search_handles_api_error(mock_search_class):
     assert "error" in result
     assert "Rate limit exceeded" in result["error"]
     assert result["products"] == []
+
+
+@patch.dict(os.environ, {"SERPAPI_KEY": "fake_key"})
+@patch("tools.amazon.GoogleSearch")
+def test_search_filters_out_sponsored_results(mock_search_class):
+    mock_search_class.return_value.get_dict.return_value = {
+        "organic_results": [
+            make_mock_result(title="Sponsored Laptop", sponsored=True),
+            make_mock_result(title="Organic Laptop"),
+        ]
+    }
+
+    from tools.amazon import search_amazon
+    result = search_amazon(query="laptop", optimize_for="price", max_results=5)
+
+    assert len(result["products"]) == 1
+    assert result["products"][0]["title"] == "Organic Laptop"
 
 
 @patch.dict(os.environ, {"SERPAPI_KEY": "fake_key"})

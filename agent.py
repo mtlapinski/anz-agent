@@ -46,7 +46,7 @@ TOOLS = [
                 },
                 "max_results": {
                     "type": "integer",
-                    "description": "Number of results to return, between 3 and 5",
+                    "description": "Number of results to return, default 10",
                 },
                 "max_price": {
                     "type": "number",

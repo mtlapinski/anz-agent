@@ -7,7 +7,7 @@ from tools import cache
 def search_amazon(
     query: str,
     optimize_for: str,
-    max_results: int = 5,
+    max_results: int = 10,
     max_price: Optional[float] = None,
     view: Optional[str] = None,
 ) -> dict:
@@ -43,6 +43,9 @@ def search_amazon(
 def _build_products(raw_items: list[dict], max_results: int, max_price: Optional[float]) -> list[dict]:
     products = []
     for item in raw_items:
+        if item.get("sponsored"):
+            continue
+
         title = item.get("title")
         if not title:
             continue
