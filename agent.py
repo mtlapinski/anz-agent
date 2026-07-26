@@ -136,6 +136,18 @@ JUDGE_SYSTEM_PROMPT = (
 )
 
 
+def _strip_json_fence(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
+    return text
+
+
 def judge_recommendation(client, model_config: ModelConfig, context: dict) -> "JudgeScore | None":
     user_message = (
         f"Query: {context.get('query', '')}\n"
@@ -147,7 +159,7 @@ def judge_recommendation(client, model_config: ModelConfig, context: dict) -> "J
     for attempt in range(2):
         try:
             response = llm.complete(client, model_config, JUDGE_SYSTEM_PROMPT, [], messages)
-            data = json.loads(response.text)
+            data = json.loads(_strip_json_fence(response.text))
             relevance = int(data["relevance"])
             fit = int(data["fit"])
             quality = int(data["quality"])

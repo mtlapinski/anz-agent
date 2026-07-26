@@ -285,6 +285,22 @@ def test_judge_recommendation_returns_none_after_two_failures(mock_llm):
     assert mock_llm.complete.call_count == 2
 
 
+@patch("agent.llm")
+def test_judge_recommendation_strips_markdown_code_fence(mock_llm):
+    from agent import judge_recommendation
+    mock_llm.complete.return_value = LLMResponse(
+        text='```json\n{"relevance": 4, "fit": 4, "quality": 4, "note": "solid"}\n```',
+        tool_calls=None, input_tokens=10, output_tokens=5,
+    )
+    context = {"query": "q", "optimize_for": "price", "recommendation": "r"}
+
+    result = judge_recommendation(MagicMock(), default_config(), context)
+
+    assert result is not None
+    assert result.overall == 4.0
+    assert mock_llm.complete.call_count == 1
+
+
 def test_search_amazon_tool_schema_has_view_param():
     from agent import TOOLS
     schema = TOOLS[0]["input_schema"]
