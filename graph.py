@@ -1,5 +1,5 @@
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Annotated, Any, TypedDict
 import json
 
@@ -25,7 +25,7 @@ class GraphState(TypedDict):
     last_search_results: dict | None
     trace_id: str | None
     response: str | None
-    judge_score: "agent.JudgeScore | None"
+    judge_score: "dict | None"
 
 
 @dataclass
@@ -155,13 +155,15 @@ def judge_node(state: GraphState, runtime) -> dict:
         judge_score = None
     if judge_score is None:
         print("[judge scoring failed after retry, continuing without judge score]")
-    return {"judge_score": judge_score}
+    return {"judge_score": asdict(judge_score) if judge_score is not None else None}
 
 
 def eval_node(state: GraphState) -> dict:
     context = _eval_context(state)
     human_score = interrupt(context)
-    agent.record_score(state.get("trace_id"), context, human_score, state.get("judge_score"))
+    judge_dict = state.get("judge_score")
+    judge_score = agent.JudgeScore(**judge_dict) if judge_dict is not None else None
+    agent.record_score(state.get("trace_id"), context, human_score, judge_score)
     return {}
 
 
