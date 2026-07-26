@@ -160,20 +160,37 @@ def judge_recommendation(client, model_config: ModelConfig, context: dict) -> "J
     return None
 
 
-def record_score(trace_id: str | None, context: dict, score: "EvalScore | None") -> None:
-    if score is None:
+def record_score(
+    trace_id: str | None,
+    context: dict,
+    human_score: "EvalScore | None",
+    judge_score: "JudgeScore | None" = None,
+) -> None:
+    if human_score is None and judge_score is None:
         return
 
     if trace_id:
-        try:
-            _get_langfuse().create_score(
-                trace_id=trace_id,
-                name="usefulness",
-                value=score.overall,
-                comment=score.note,
-            )
-        except Exception:
-            pass
+        if human_score is not None:
+            try:
+                _get_langfuse().create_score(
+                    trace_id=trace_id,
+                    name="usefulness",
+                    value=human_score.overall,
+                    comment=human_score.note,
+                )
+            except Exception:
+                pass
+        if judge_score is not None:
+            for name, value, comment in (
+                ("judge_relevance", judge_score.relevance, None),
+                ("judge_fit", judge_score.fit, None),
+                ("judge_quality", judge_score.quality, None),
+                ("judge_overall", judge_score.overall, judge_score.note),
+            ):
+                try:
+                    _get_langfuse().create_score(trace_id=trace_id, name=name, value=value, comment=comment)
+                except Exception:
+                    pass
 
     try:
         os.makedirs("evals", exist_ok=True)
@@ -182,8 +199,13 @@ def record_score(trace_id: str | None, context: dict, score: "EvalScore | None")
             "query": context.get("query", ""),
             "optimize_for": context.get("optimize_for", ""),
             "recommendation": context.get("recommendation", ""),
-            "overall": score.overall,
-            "note": score.note,
+            "overall": human_score.overall if human_score else None,
+            "note": human_score.note if human_score else None,
+            "judge_relevance": judge_score.relevance if judge_score else None,
+            "judge_fit": judge_score.fit if judge_score else None,
+            "judge_quality": judge_score.quality if judge_score else None,
+            "judge_overall": judge_score.overall if judge_score else None,
+            "judge_note": judge_score.note if judge_score else None,
         }
         with open("evals/scores.jsonl", "a") as f:
             f.write(json.dumps(row) + "\n")

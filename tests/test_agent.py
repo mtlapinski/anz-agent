@@ -169,6 +169,80 @@ def test_record_score_continues_when_jsonl_write_fails(mock_lf, tmp_path, monkey
     record_score(None, {"query": "q", "optimize_for": "price", "recommendation": "r"}, score)  # should not raise
 
 
+@patch("agent._get_langfuse")
+def test_record_score_writes_judge_fields_to_jsonl(mock_lf, tmp_path, monkeypatch):
+    from agent import record_score, EvalScore, JudgeScore
+    monkeypatch.chdir(tmp_path)
+    human = EvalScore(overall=4, note="good pick")
+    judge = JudgeScore(relevance=5, fit=4, quality=5, overall=4.7, note="great match")
+    context = {"query": "laptop", "optimize_for": "price", "recommendation": "Here are 3 laptops..."}
+
+    record_score("trace-123", context, human, judge)
+
+    row = json.loads((tmp_path / "evals" / "scores.jsonl").read_text().strip())
+    assert row["judge_relevance"] == 5
+    assert row["judge_fit"] == 4
+    assert row["judge_quality"] == 5
+    assert row["judge_overall"] == 4.7
+    assert row["judge_note"] == "great match"
+
+
+@patch("agent._get_langfuse")
+def test_record_score_writes_none_judge_fields_when_judge_score_is_none(mock_lf, tmp_path, monkeypatch):
+    from agent import record_score, EvalScore
+    monkeypatch.chdir(tmp_path)
+    human = EvalScore(overall=4, note="good pick")
+    context = {"query": "laptop", "optimize_for": "price", "recommendation": "..."}
+
+    record_score("trace-123", context, human, None)
+
+    row = json.loads((tmp_path / "evals" / "scores.jsonl").read_text().strip())
+    assert row["judge_relevance"] is None
+    assert row["judge_overall"] is None
+    assert row["judge_note"] is None
+
+
+@patch("agent._get_langfuse")
+def test_record_score_calls_langfuse_for_judge_scores(mock_lf, tmp_path, monkeypatch):
+    from agent import record_score, EvalScore, JudgeScore
+    monkeypatch.chdir(tmp_path)
+    mock_client = MagicMock()
+    mock_lf.return_value = mock_client
+    human = EvalScore(overall=4, note=None)
+    judge = JudgeScore(relevance=5, fit=4, quality=3, overall=4.0, note="solid")
+    context = {"query": "q", "optimize_for": "price", "recommendation": "r"}
+
+    record_score("trace-abc", context, human, judge)
+
+    mock_client.create_score.assert_any_call(trace_id="trace-abc", name="judge_relevance", value=5, comment=None)
+    mock_client.create_score.assert_any_call(trace_id="trace-abc", name="judge_fit", value=4, comment=None)
+    mock_client.create_score.assert_any_call(trace_id="trace-abc", name="judge_quality", value=3, comment=None)
+    mock_client.create_score.assert_any_call(trace_id="trace-abc", name="judge_overall", value=4.0, comment="solid")
+
+
+@patch("agent._get_langfuse")
+def test_record_score_writes_row_when_human_none_but_judge_present(mock_lf, tmp_path, monkeypatch):
+    from agent import record_score, JudgeScore
+    monkeypatch.chdir(tmp_path)
+    judge = JudgeScore(relevance=5, fit=4, quality=5, overall=4.7, note="great")
+    context = {"query": "q", "optimize_for": "price", "recommendation": "r"}
+
+    record_score("trace-1", context, None, judge)
+
+    assert (tmp_path / "evals" / "scores.jsonl").exists()
+
+
+@patch("agent._get_langfuse")
+def test_record_score_skips_entirely_when_both_scores_none(mock_lf, tmp_path, monkeypatch):
+    from agent import record_score
+    monkeypatch.chdir(tmp_path)
+    context = {"query": "q", "optimize_for": "price", "recommendation": "r"}
+
+    record_score("trace-1", context, None, None)
+
+    assert not (tmp_path / "evals" / "scores.jsonl").exists()
+
+
 @patch("agent.llm")
 def test_judge_recommendation_success(mock_llm):
     from agent import judge_recommendation, JudgeScore
