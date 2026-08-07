@@ -448,3 +448,37 @@ def test_build_graph_uses_postgres_checkpointer_and_shares_state_across_instance
     state_b = graph_b.get_state(config)
 
     assert state_b.values.get("response") == "hello from replica A"
+
+
+def test_build_graph_keeps_each_instance_connection_alive(postgres_url, monkeypatch):
+    """Regression test: each graph instance must keep its own Postgres connection
+    alive, independent of other graph instances. Building a second graph must not
+    close the first graph's connection through garbage collection.
+    """
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    import importlib
+    import graph
+    importlib.reload(graph)
+
+    config_a = {"configurable": {"thread_id": "thread-a"}}
+    config_b = {"configurable": {"thread_id": "thread-b"}}
+
+    # Build graph_a and write state through it
+    graph_a = graph.build_graph()
+    graph_a.update_state(config_a, {"response": "from graph_a (first call)"})
+
+    # Build graph_b, which must not close graph_a's connection
+    graph_b = graph.build_graph()
+    graph_b.update_state(config_b, {"response": "from graph_b"})
+
+    # Build graph_c to further test that graph_a's connection survives multiple
+    # subsequent builds
+    graph_c = graph.build_graph()
+    graph_c.update_state({"configurable": {"thread_id": "thread-c"}}, {"response": "from graph_c"})
+
+    # Verify graph_a's connection is still alive by writing through it again
+    graph_a.update_state(config_a, {"response": "from graph_a (second call)"})
+
+    # Read back to verify the write succeeded
+    state_a = graph_a.get_state(config_a)
+    assert state_a.values.get("response") == "from graph_a (second call)"

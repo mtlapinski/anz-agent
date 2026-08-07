@@ -13,11 +13,6 @@ from langgraph.graph import END, StateGraph, START
 from langgraph.types import interrupt
 from llm import ModelConfig
 
-# Keep a reference to the PostgresSaver context manager to ensure the connection
-# remains open for the process lifetime
-_pg_context = None
-
-
 def add_to_history(existing: list, new: list) -> list:
     return existing + new
 
@@ -180,7 +175,6 @@ def eval_node(state: GraphState) -> dict:
 
 
 def build_graph():
-    global _pg_context
     builder = StateGraph(GraphState, context_schema=GraphContext)
     builder.add_node("agent", agent_node)
     builder.add_node("tools", tools_node)
@@ -195,9 +189,15 @@ def build_graph():
     if database_url:
         # Kept open for the process lifetime — this app builds one graph at
         # import time (see server.py/main.py) and reuses it for every request.
-        _pg_context = PostgresSaver.from_conn_string(database_url)
-        checkpointer = _pg_context.__enter__()
+        # Store the context manager on the compiled graph to keep the connection
+        # alive independently of other graph instances.
+        pg_context = PostgresSaver.from_conn_string(database_url)
+        checkpointer = pg_context.__enter__()
         checkpointer.setup()
     else:
+        pg_context = None
         checkpointer = MemorySaver()
-    return builder.compile(checkpointer=checkpointer)
+    compiled = builder.compile(checkpointer=checkpointer)
+    # Keep the PostgresSaver context manager alive for this specific graph instance
+    compiled._pg_context = pg_context
+    return compiled
