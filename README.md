@@ -97,8 +97,35 @@ Notes:
   command for that).
 - Responses are not streamed — the chat pane shows the full reply once the agent
   finishes, same latency profile as the CLI.
-- Sessions live only in the running `server.py` process's memory; restarting it
-  invalidates all open sessions (same `MemorySaver` limitation the CLI has).
+- Without `DATABASE_URL` set, sessions live only in the running `server.py`
+  process's memory; restarting it invalidates all open sessions (same
+  `MemorySaver` limitation the CLI has). With `DATABASE_URL` set (as in the
+  Docker Compose stack — see "Running the scaled stack locally" below),
+  sessions persist in Postgres across restarts and are shared across
+  replicas.
+
+## Running the scaled stack locally
+
+A Docker Compose stack runs two `server.py` replicas behind nginx, backed by
+Postgres for both session storage and the search cache — a local stand-in for
+horizontal scaling.
+
+A `.env` file must exist before starting (`env_file: .env` is required by
+`docker-compose.yml`); create one from `.env.example` as in Setup above if
+you haven't already.
+
+```bash
+docker compose up --build
+```
+
+The stack is then reachable at `http://localhost:8000` — through nginx, not
+directly against either replica. `GET /healthz` reports which replica served
+a given request.
+
+To bring an existing local SQLite cache (`~/.anz-agent/cache.db`) along, run
+`DATABASE_URL=postgresql://anz:anz@localhost:5432/anz_agent python
+scripts/migrate_cache_to_postgres.py` once, against the Compose stack's
+exposed Postgres port.
 
 ## Configuration
 
@@ -132,13 +159,16 @@ Add this to your shell profile or set it before running pytest if you encounter 
 
 ## Search cache
 
-`search_amazon` caches results locally in `~/.anz-agent/cache.db` (SQLite) to
-conserve the SerpAPI free-tier quota. An exact reworded/reordered query
-(e.g. "balance beam purple" vs. "purple balance beam") reuses the cache
-directly; other queries are checked against past searches by a small LLM
-judge (`tools/cache_judge.py`) that decides if a prior search is a close
-enough match to reuse (e.g. "balance beam" reusing "purple balance beam"
-results). Entries never expire — delete `~/.anz-agent/cache.db` to clear
+`search_amazon` caches results to conserve the SerpAPI free-tier quota. By
+default (no `DATABASE_URL` set) it caches locally in `~/.anz-agent/cache.db`
+(SQLite); when `DATABASE_URL` is set (as in the Docker Compose stack) it
+caches in Postgres instead, shared across replicas. An exact
+reworded/reordered query (e.g. "balance beam purple" vs. "purple balance
+beam") reuses the cache directly; other queries are checked against past
+searches by a small LLM judge (`tools/cache_judge.py`) that decides if a
+prior search is a close enough match to reuse (e.g. "balance beam" reusing
+"purple balance beam" results). Entries never expire — delete
+`~/.anz-agent/cache.db` (SQLite) or the `searches` table (Postgres) to clear
 the cache manually.
 
 ## Models
@@ -158,13 +188,20 @@ anz-agent/
 ├── graph.py         # LangGraph StateGraph — agent/tools/eval nodes
 ├── agent.py         # LLM prompt/tools, Langfuse tracing, eval scoring
 ├── server.py        # FastAPI backend for the web UI — /session, /chat, /resume
+├── db.py             # Postgres connection helper + schema migrations, used when DATABASE_URL is set
 ├── tools/
 │   ├── amazon.py       # SerpAPI search tool, checks the local cache first
-│   ├── cache.py         # SQLite-backed search result cache (~/.anz-agent/cache.db)
-│   └── cache_judge.py   # LLM subagent that fuzzy-matches queries against the cache
+│   ├── cache.py         # Search result cache — SQLite by default, Postgres when DATABASE_URL is set
+│   ├── cache_judge.py   # LLM subagent that fuzzy-matches queries against the cache
+│   └── session_store.py # Session config storage — Postgres-backed when DATABASE_URL is set
+├── scripts/
+│   └── migrate_cache_to_postgres.py  # One-time migration of the local SQLite cache into Postgres
 ├── web/              # Vite/React/TypeScript frontend for the web UI
 ├── tests/
 ├── evals/           # scores.jsonl — eval ratings (gitignored)
+├── Dockerfile         # Container image for server.py, used by docker-compose.yml
+├── docker-compose.yml # Local 2-replica + nginx + Postgres stack (see below)
+├── nginx.conf          # Load-balancer config for the docker-compose stack
 ├── .env.example
 └── requirements.txt
 ```
