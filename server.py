@@ -112,6 +112,11 @@ async def resume(req: ResumeRequest) -> dict:
     return {"type": "message", "text": "Thanks for the rating!", "products": None, "view": None}
 
 
+@app.get("/healthz")
+def healthz() -> dict:
+    return {"replica": os.environ.get("REPLICA_ID", "unknown")}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="127.0.0.1", port=8000)

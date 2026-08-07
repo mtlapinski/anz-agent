@@ -188,6 +188,19 @@ def test_chat_checkpointer_error_surfaces_as_explicit_error_not_silent_reset(moc
     assert response.json() == {"type": "error", "message": "could not connect to Postgres"}
 
 
+def test_healthz_returns_replica_id(client, monkeypatch):
+    monkeypatch.setenv("REPLICA_ID", "app-1")
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"replica": "app-1"}
+
+
+def test_healthz_defaults_to_unknown_without_replica_id(client, monkeypatch):
+    monkeypatch.delenv("REPLICA_ID", raising=False)
+    response = client.get("/healthz")
+    assert response.json() == {"replica": "unknown"}
+
+
 @patch("server._graph")
 def test_chat_requests_do_not_serialize_on_slow_graph_invoke(mock_graph, client, isolated_session_store):
     isolated_session_store["t-slow-1"] = ModelConfig(provider="google", model="m")
