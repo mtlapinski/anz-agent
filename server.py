@@ -11,13 +11,14 @@ from agent import EvalScore
 from graph import build_graph, GraphContext
 from llm import ModelConfig, create_client
 from main import PROVIDER_KEYS
+from tools import session_store
+from tools.session_store import SessionNotFound
 
 load_dotenv()
 
 app = FastAPI()
 
 _graph = build_graph()
-_sessions: dict[str, GraphContext] = {}
 
 
 class SessionRequest(BaseModel):
@@ -48,7 +49,7 @@ def create_session(req: SessionRequest) -> SessionResponse:
 
     config = ModelConfig(provider=req.provider, model=req.model)
     thread_id = str(uuid.uuid4())
-    _sessions[thread_id] = GraphContext(client=create_client(config), model_config=config)
+    session_store.create_session(thread_id, config)
     return SessionResponse(thread_id=thread_id)
 
 
@@ -57,10 +58,11 @@ def _graph_config(thread_id: str) -> dict:
 
 
 def _get_context(thread_id: str) -> GraphContext:
-    context = _sessions.get(thread_id)
-    if context is None:
+    try:
+        config = session_store.get_session(thread_id)
+    except SessionNotFound:
         raise HTTPException(status_code=404, detail="unknown thread_id")
-    return context
+    return GraphContext(client=create_client(config), model_config=config)
 
 
 def _format_chat_result(result: dict) -> dict:
