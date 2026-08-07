@@ -197,21 +197,24 @@ def test_build_graph_uses_postgres_checkpointer_and_shares_state_across_instance
 
     config = {"configurable": {"thread_id": "shared-thread"}}
 
-    # Simulate replica A handling turn 1
+    # Simulate replica A writing a checkpoint directly (no LLM call needed —
+    # update_state() writes a checkpoint the same way a real node's return
+    # value would, without running any graph nodes).
     graph_a = graph.build_graph()
-    graph_a.get_state(config)  # no turns yet, just confirms it doesn't error
+    graph_a.update_state(config, {"response": "hello from replica A"})
 
-    # Simulate replica B (a fresh graph instance, same DB) reading turn 1's checkpoint
+    # Simulate replica B — a completely separate graph/checkpointer instance,
+    # same DB — reading that checkpoint back.
     graph_b = graph.build_graph()
     state_b = graph_b.get_state(config)
 
-    assert state_b is not None  # both instances see the same Postgres-backed thread
+    assert state_b.values.get("response") == "hello from replica A"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_graph.py::test_build_graph_uses_postgres_checkpointer_and_shares_state_across_instances -v`
-Expected: FAIL — `build_graph()` still always uses `MemorySaver`, so each instance has its own state (no shared-instance failure yet, but the assertion below will be revisited once the real behavior is wired — this test's purpose is to fail for the *right* reason: no Postgres wiring exists yet). Confirm the failure is an import/attribute error, not a false pass.
+Expected: FAIL — `build_graph()` still always uses `MemorySaver`, so `graph_a` and `graph_b` are two independent in-process dicts; `graph_b` never sees the state `graph_a` wrote, so `state_b.values` is empty and the assertion fails for the right reason (real isolation, not a vacuous check — `get_state()` on an empty thread returns a non-`None` `StateSnapshot` regardless of backend, which is why the test asserts on the actual written value rather than `is not None`).
 
 - [ ] **Step 3: Implement the checkpointer swap**
 
