@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from langgraph.types import Command
 from starlette.concurrency import run_in_threadpool
 
+import db
 from agent import EvalScore
 from graph import build_graph, GraphContext
 from llm import ModelConfig, create_client
@@ -18,6 +19,11 @@ from tools.session_store import SessionNotFound
 load_dotenv()
 
 app = FastAPI()
+
+# Idempotent — safe to call on every process startup. Each replica runs this
+# independently; CREATE TABLE IF NOT EXISTS makes concurrent startups safe.
+if os.environ.get("DATABASE_URL"):
+    db.run_migrations()
 
 _graph = build_graph()
 
