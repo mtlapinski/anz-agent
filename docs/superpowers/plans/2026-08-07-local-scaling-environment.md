@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- `DATABASE_URL` unset → existing `MemorySaver`/SQLite behavior, unchanged. `DATABASE_URL` set → Postgres for checkpointer, sessions, and cache. This branch must hold in every task below.
+- `DATABASE_URL` unset → existing `MemorySaver`/SQLite behavior, unchanged. `DATABASE_URL` set → Postgres for checkpointer, sessions, and cache. This branch must hold in every task below. **Exception (adjudicated during Task 6's review):** the cache-judge candidate pre-filter (`_shortlist_candidates()`, Tasks 6/7) intentionally applies to the SQLite path too, not just Postgres — it resolves BACKLOG.md's "Judge candidate pre-filtering" item, which was filed against the original SQLite-only cache and predates the Postgres work entirely. Restricting it to Postgres-only would leave that backlog item unresolved for anyone not yet on Postgres. The pre-filter only affects which already-stored queries the judge considers as fuzzy-match candidates on a lookup — it never affects what gets `store()`d; below 20 distinct cached queries it's a no-op either way.
 - `tools/cache.py`'s public API (`normalize()`, `lookup()`, `store()`) keeps its exact existing signatures — `tools/amazon.py` must not need to change.
 - No changes to `graph.py` node functions or the `interrupt()`/`Command(resume=...)` flow — only the checkpointer construction in `build_graph()` changes.
 - Cache entries still never expire (no TTL) — unchanged from today.
