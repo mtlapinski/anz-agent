@@ -426,3 +426,25 @@ def test_build_graph_resume_does_not_warn_on_checkpoint_deserialization(mock_llm
 
     assert "Deserializing unregistered type" not in caplog.text
     assert "msgpack" not in caplog.text
+
+
+def test_build_graph_uses_postgres_checkpointer_and_shares_state_across_instances(postgres_url, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
+    import importlib
+    import graph
+    importlib.reload(graph)  # picks up the env var at build_graph() call time
+
+    config = {"configurable": {"thread_id": "shared-thread"}}
+
+    # Simulate replica A writing a checkpoint directly (no LLM call needed —
+    # update_state() writes a checkpoint the same way a real node's return
+    # value would, without running any graph nodes).
+    graph_a = graph.build_graph()
+    graph_a.update_state(config, {"response": "hello from replica A"})
+
+    # Simulate replica B — a completely separate graph/checkpointer instance,
+    # same DB — reading that checkpoint back.
+    graph_b = graph.build_graph()
+    state_b = graph_b.get_state(config)
+
+    assert state_b.values.get("response") == "hello from replica A"

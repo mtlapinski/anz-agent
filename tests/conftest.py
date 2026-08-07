@@ -1,4 +1,5 @@
 import pytest
+from tests.postgres_fixtures import postgres_url  # noqa: F401
 
 
 @pytest.fixture(autouse=True)

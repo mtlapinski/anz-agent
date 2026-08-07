@@ -2,14 +2,20 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Annotated, Any, TypedDict
 import json
+import os
 
 import agent
 import llm
 from agent import SYSTEM_PROMPT, TOOLS
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, StateGraph, START
 from langgraph.types import interrupt
 from llm import ModelConfig
+
+# Keep a reference to the PostgresSaver context manager to ensure the connection
+# remains open for the process lifetime
+_pg_context = None
 
 
 def add_to_history(existing: list, new: list) -> list:
@@ -174,6 +180,7 @@ def eval_node(state: GraphState) -> dict:
 
 
 def build_graph():
+    global _pg_context
     builder = StateGraph(GraphState, context_schema=GraphContext)
     builder.add_node("agent", agent_node)
     builder.add_node("tools", tools_node)
@@ -184,4 +191,13 @@ def build_graph():
     builder.add_edge("tools", "agent")
     builder.add_edge("judge", "eval")
     builder.add_edge("eval", END)
-    return builder.compile(checkpointer=MemorySaver())
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        # Kept open for the process lifetime — this app builds one graph at
+        # import time (see server.py/main.py) and reuses it for every request.
+        _pg_context = PostgresSaver.from_conn_string(database_url)
+        checkpointer = _pg_context.__enter__()
+        checkpointer.setup()
+    else:
+        checkpointer = MemorySaver()
+    return builder.compile(checkpointer=checkpointer)
