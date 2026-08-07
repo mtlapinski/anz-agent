@@ -120,9 +120,15 @@ def tools_node(state: GraphState) -> dict:
     last_search_results = state.get("last_search_results")
     for tc in state["pending_tool_calls"]:
         result = agent.run_tool(tc["name"], tc["input"], trace_id=trace_id)
-        tool_results.append({"type": "tool_result", "tool_use_id": tc["id"], "content": result})
+        content = result
         if tc["name"] == "search_amazon":
             last_search_results = json.loads(result)
+            llm_view = {
+                **last_search_results,
+                "products": agent.strip_image_for_llm(last_search_results.get("products", [])),
+            }
+            content = json.dumps(llm_view)
+        tool_results.append({"type": "tool_result", "tool_use_id": tc["id"], "content": content})
     return {
         "history": [{"role": "user", "content": tool_results}],
         "pending_tool_calls": None,

@@ -106,6 +106,10 @@ def run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None) -> s
     raise ValueError(f"Unknown tool: {tool_name}")
 
 
+def strip_image_for_llm(products: list[dict]) -> list[dict]:
+    return [{k: v for k, v in p.items() if k != "image"} for p in products]
+
+
 @dataclass
 class EvalScore:
     overall: int | None

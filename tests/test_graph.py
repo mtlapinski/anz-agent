@@ -179,6 +179,31 @@ def test_tools_node_captures_last_search_results(mock_run_tool):
 
 
 @patch("graph.agent.run_tool")
+def test_tools_node_strips_image_from_llm_tool_result_but_keeps_it_in_last_search_results(mock_run_tool):
+    from graph import tools_node
+    mock_run_tool.return_value = json.dumps({
+        "products": [
+            {"title": "Laptop", "price": 999.0, "image": "https://example.com/thumb.jpg"},
+        ]
+    })
+    state = empty_state(
+        pending_tool_calls=[{"name": "search_amazon", "id": "tu_1",
+                               "input": {"query": "laptop", "optimize_for": "price", "max_results": 5}}],
+        trace_id="trace-1",
+    )
+
+    result = tools_node(state)
+
+    tool_result_msg = result["history"][0]
+    llm_content = json.loads(tool_result_msg["content"][0]["content"])
+    assert llm_content == {"products": [{"title": "Laptop", "price": 999.0}]}
+
+    assert result["last_search_results"] == {
+        "products": [{"title": "Laptop", "price": 999.0, "image": "https://example.com/thumb.jpg"}]
+    }
+
+
+@patch("graph.agent.run_tool")
 def test_tools_node_missing_data_when_no_search_call(mock_run_tool):
     from graph import tools_node
     mock_run_tool.return_value = json.dumps({"result": "some_other_tool_result"})

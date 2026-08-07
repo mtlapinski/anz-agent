@@ -23,6 +23,39 @@ def test_run_tool_unknown_raises():
         run_tool("nonexistent_tool", {})
 
 
+def test_strip_image_for_llm_removes_image_field():
+    from agent import strip_image_for_llm
+    products = [
+        {"title": "Laptop", "price": 999.0, "image": "https://example.com/thumb1.jpg"},
+        {"title": "Mouse", "price": 19.99, "image": "https://example.com/thumb2.jpg"},
+    ]
+    result = strip_image_for_llm(products)
+    assert result == [
+        {"title": "Laptop", "price": 999.0},
+        {"title": "Mouse", "price": 19.99},
+    ]
+
+
+def test_strip_image_for_llm_handles_missing_image_field():
+    from agent import strip_image_for_llm
+    products = [{"title": "Laptop", "price": 999.0}]
+    result = strip_image_for_llm(products)
+    assert result == [{"title": "Laptop", "price": 999.0}]
+
+
+def test_strip_image_for_llm_handles_empty_list():
+    from agent import strip_image_for_llm
+    assert strip_image_for_llm([]) == []
+
+
+def test_strip_image_for_llm_does_not_mutate_input():
+    from agent import strip_image_for_llm
+    original = {"title": "Laptop", "image": "https://example.com/thumb1.jpg"}
+    products = [original]
+    strip_image_for_llm(products)
+    assert original == {"title": "Laptop", "image": "https://example.com/thumb1.jpg"}
+
+
 @patch("agent._get_langfuse")
 def test_run_tool_creates_langfuse_span_with_trace_id(mock_lf):
     from agent import run_tool
