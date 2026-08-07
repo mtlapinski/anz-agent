@@ -122,6 +122,22 @@ enough match to reuse (e.g. "balance beam" reusing "purple balance beam"
 results). Entries never expire — delete `~/.anz-agent/cache.db` to clear
 the cache manually.
 
+## Eval report
+
+`evals/scores.jsonl` accumulates one row per rated recommendation (human
+`overall` score plus the LLM judge's `relevance`/`fit`/`quality`/`overall`
+scores — see [docs/superpowers/specs/2026-07-26-llm-judge-design.md](docs/superpowers/specs/2026-07-26-llm-judge-design.md)).
+To see it as a dashboard instead of raw JSON lines:
+
+```bash
+python scripts/eval_report.py
+```
+
+This writes `evals/report.html` and opens it in your browser: summary stats,
+a sortable table of every rated turn, the 10 lowest-scoring recommendations,
+and a human-vs-judge score chart over time. Re-run it any time to pick up new
+rows — it's a static snapshot, not a live-updating page.
+
 ## Models
 
 | Provider | Recommended model | Notes |
