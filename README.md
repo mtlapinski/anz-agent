@@ -111,6 +111,25 @@ Notes:
 | `LANGFUSE_SECRET_KEY` | No — optional observability |
 | `LANGFUSE_HOST` | No — defaults to Langfuse cloud |
 
+## Testing
+
+Run tests with:
+```bash
+pytest
+```
+
+Tests that use testcontainers (e.g., Postgres tests) require Docker to be running.
+
+### Testcontainers on macOS with Colima
+
+If you develop on macOS using Colima, testcontainers may need the following environment variable set to work correctly:
+
+```bash
+export TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE=/var/run/docker.sock
+```
+
+Add this to your shell profile or set it before running pytest if you encounter Docker socket errors during test runs.
+
 ## Search cache
 
 `search_amazon` caches results locally in `~/.anz-agent/cache.db` (SQLite) to

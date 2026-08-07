@@ -36,4 +36,3 @@ def run_migrations(conn_str: str | None = None) -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_normalized_query ON searches(normalized_query)")
-        conn.commit()
