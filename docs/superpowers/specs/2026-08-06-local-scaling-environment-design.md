@@ -39,9 +39,11 @@ One Postgres container holds three concerns as separate tables in one database: 
 
   Fix: a small `sessions` table (`thread_id`, `provider`, `model`, `created_at`) in Postgres. `POST /session` writes a row *before* any graph invocation happens (avoiding a chicken-and-egg problem: `GraphState` doesn't exist yet to hold this on the first call). `/chat` and `/resume` read the row by `thread_id`, build a `ModelConfig`, and construct a fresh client via `llm.create_client()` — replacing the in-memory dict lookup with a per-request reconstruction that works from any replica. An unknown `thread_id` returns 404, same as today.
 
+  This trades away the connection-pool reuse `_sessions` gave for free — today's client is built once per session and its underlying HTTP connections stay warm across requests; reconstructing it per-request means occasionally re-paying a TCP/TLS handshake to the LLM provider. Client construction itself isn't a network call, so this is a minor latency cost, not a correctness or scaling concern.
+
 **3. Postgres search cache.** [tools/cache.py](../../../tools/cache.py) moves off `sqlite3` onto Postgres. Same `searches` table shape and the same `lookup()`/`store()` function signatures — [tools/amazon.py](../../../tools/amazon.py) is unaffected. `raw_results` becomes `JSONB` (was a JSON-encoded text column); `created_at` becomes `TIMESTAMPTZ`.
 
-**4. Cache-judge candidate pre-filter.** In `lookup()`, before calling the judge subagent ([tools/cache_judge.py](../../../tools/cache_judge.py)), tokenize the new query the same way `normalize()` already does and rank cached distinct queries by shared-token overlap. Only the top ~20 candidates are sent to the judge, instead of every distinct query ever cached — bounding the judge prompt's size (and cost/latency) regardless of how large the cache grows. Ranking happens in Python for now; a Postgres trigram index (`pg_trgm`) is the natural next step if the candidate table grows into the tens of thousands of rows, but isn't needed yet.
+**4. Cache-judge candidate pre-filter.** In `lookup()`, before calling the judge subagent ([tools/cache_judge.py](../../../tools/cache_judge.py)), tokenize the new query the same way `normalize()` already does and rank cached distinct queries by shared-token overlap. Only the top ~20 candidates are sent to the judge, instead of every distinct query ever cached — bounding the judge prompt's size (and cost/latency) regardless of how large the cache grows. Ranking happens in Python for now; a Postgres trigram index (`pg_trgm`) is the natural next step if the candidate table grows into the tens of thousands of rows, but isn't needed yet. This resolves BACKLOG.md's "Judge candidate pre-filtering" entry — remove that entry when this ships.
 
 **5. Two replicas behind a load balancer.** A single Dockerfile builds the app image; Compose runs it twice (`app-1`, `app-2`). `nginx` round-robins between them, with passive health checks (`max_fails`/`fail_timeout`) so a crashed replica is routed around automatically.
 
@@ -64,7 +66,8 @@ Client → `nginx` (round robin) → `app-1` or `app-2` → `run_in_threadpool(g
 
 - **Cache fails open.** Any Postgres error during cache `lookup`/`store` is caught and treated as a miss — falls through to a live SerpAPI call, same as today's SQLite behavior. A cache outage should never break a search.
 - **Checkpointer fails loud.** A Postgres error while reading/writing checkpoint state surfaces as a request error (500) rather than silently resuming with empty state — a silent reset would be more confusing than an explicit failure, since it looks like the agent forgot the conversation.
-- **Session lookup miss** (unknown or missing `thread_id` row) returns 404, matching today's `_get_context()` behavior.
+- **Session lookup miss** (the query succeeds but finds no row for that `thread_id`) returns 404, matching today's `_get_context()` behavior.
+- **Session lookup failure** (the query itself errors — e.g. a Postgres connectivity blip) fails loud (500), same philosophy as the checkpointer. It must not collapse into the same 404 as a legitimate miss, which would silently disguise an infra outage as "your session doesn't exist."
 - **Session creation failure** (the `sessions` table write in `POST /session` errors) surfaces immediately as a request error, rather than handing back a `thread_id` the app can never actually load.
 - **Replica failure** is handled by `nginx`'s passive health checks, not application code.
 
