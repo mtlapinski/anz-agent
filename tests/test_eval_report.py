@@ -1,4 +1,4 @@
-from scripts.eval_report import load_rows, ReportStats, compute_stats
+from scripts.eval_report import load_rows, ReportStats, compute_stats, render_html
 
 
 def test_load_rows_missing_file(tmp_path):
@@ -73,3 +73,10 @@ def test_compute_stats_mixed_rows_and_agreement():
     assert stats.agreement_avg == 1.0  # mean of |5-3|=2 and |2-2|=0
     assert stats.missing_human == 1
     assert stats.missing_judge == 1
+
+
+def test_render_html_escapes_script_breakout_in_embedded_data():
+    rows = [{"query": "</script><script>alert(1)</script>", "overall": 3, "judge_overall": None}]
+    stats = compute_stats(rows)
+    html = render_html(rows, stats)
+    assert "</script><script>" not in html

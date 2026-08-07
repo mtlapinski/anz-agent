@@ -67,9 +67,29 @@ def compute_stats(rows: list[dict]) -> ReportStats:
     )
 
 
+DISPLAY_KEYS = [
+    "timestamp", "query", "optimize_for", "overall", "note",
+    "judge_relevance", "judge_fit", "judge_quality", "judge_overall", "judge_note",
+]
+
+
+def _project(rows: list[dict]) -> list[dict]:
+    return [{k: row.get(k) for k in DISPLAY_KEYS} for row in rows]
+
+
+def _embed_json(obj) -> str:
+    """json.dumps, but safe to embed inside an HTML <script> block."""
+    return (
+        json.dumps(obj)
+        .replace("<", "\\u003c")
+        .replace(">", "\\u003e")
+        .replace("&", "\\u0026")
+    )
+
+
 def render_html(rows: list[dict], stats: ReportStats) -> str:
-    data_json = json.dumps(rows)
-    stats_json = json.dumps(dataclasses.asdict(stats))
+    data_json = _embed_json(_project(rows))
+    stats_json = _embed_json(dataclasses.asdict(stats))
     return f"""<!doctype html>
 <html>
 <head>
@@ -136,9 +156,16 @@ function renderStats() {{
   ).join('');
 }}
 
+function escapeHtml(str) {{
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}}
+
 function cellValue(row, key) {{
   const v = row[key];
-  return (v === null || v === undefined || v === '') ? '—' : v;
+  return (v === null || v === undefined || v === '') ? '—' : escapeHtml(v);
 }}
 
 function buildTable(tableEl, rows, sortable) {{
