@@ -1,3 +1,7 @@
+import pytest
+from unittest.mock import patch
+
+
 def test_normalize_ignores_word_order_and_case():
     from tools.cache import normalize
     assert normalize("Purple Balance Beam") == normalize("balance beam purple")
@@ -53,9 +57,6 @@ def test_store_gracefully_handles_unreachable_db(monkeypatch, tmp_path):
     store("test query", [{"title": "test"}])
 
 
-from unittest.mock import patch
-
-
 def test_lookup_uses_judge_for_fuzzy_match():
     from tools.cache import store, lookup
     store("purple balance beam", [{"title": "Purple Beam"}])
@@ -94,3 +95,41 @@ def test_lookup_returns_none_when_judge_raises():
         result = lookup("kettlebell")
 
     assert result is None
+
+
+class TestPostgresBackend:
+    @pytest.fixture(autouse=True)
+    def _setup(self, postgres_url, monkeypatch):
+        monkeypatch.setenv("DATABASE_URL", postgres_url)
+        import db
+        db.run_migrations(postgres_url)
+        # Each test gets a clean searches table
+        with db.get_connection() as conn:
+            conn.execute("TRUNCATE searches")
+            conn.commit()
+
+    def test_store_then_lookup_exact_match_returns_results(self):
+        from tools.cache import store, lookup
+        store("balance beam", [{"title": "Beam"}])
+
+        assert lookup("balance beam") == [{"title": "Beam"}]
+
+    def test_lookup_exact_match_ignores_word_order(self):
+        from tools.cache import store, lookup
+        store("purple balance beam", [{"title": "Purple Beam"}])
+
+        assert lookup("balance beam purple") == [{"title": "Purple Beam"}]
+
+    def test_lookup_returns_none_on_empty_cache(self):
+        from tools.cache import lookup
+        assert lookup("anything") is None
+
+    def test_lookup_gracefully_handles_unreachable_db(self, monkeypatch):
+        from tools.cache import lookup
+        monkeypatch.setenv("DATABASE_URL", "postgresql://bad:bad@localhost:1/nope")
+        assert lookup("anything") is None
+
+    def test_store_gracefully_handles_unreachable_db(self, monkeypatch):
+        from tools.cache import store
+        monkeypatch.setenv("DATABASE_URL", "postgresql://bad:bad@localhost:1/nope")
+        store("anything", [{"title": "x"}])  # must not raise
