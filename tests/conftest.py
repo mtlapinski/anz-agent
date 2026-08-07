@@ -1,4 +1,13 @@
+import os
 import pytest
+
+
+@pytest.fixture(scope="session", autouse=True)
+def setup_testcontainers_env():
+    """Configure testcontainers for use with Colima on macOS."""
+    os.environ.setdefault(
+        "TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE", "/var/run/docker.sock"
+    )
 
 
 @pytest.fixture(autouse=True)
