@@ -170,3 +170,17 @@ def test_resume_graph_exception_returns_error_payload(mock_graph, mock_create_cl
     response = client.post("/resume", json={"thread_id": "t-5", "score": 3})
 
     assert response.json() == {"type": "error", "message": "boom"}
+
+
+@patch("server._graph")
+def test_chat_checkpointer_error_surfaces_as_explicit_error_not_silent_reset(mock_graph, client, isolated_session_store):
+    isolated_session_store["t-checkpointer-down"] = ModelConfig(provider="google", model="m")
+    mock_graph.invoke.side_effect = OSError("could not connect to Postgres")
+
+    with patch("server.create_client", return_value=MagicMock()):
+        response = client.post("/chat", json={"thread_id": "t-checkpointer-down", "message": "hi"})
+
+    # Not a fabricated 200 success, and not a fake empty-history response —
+    # an explicit, visible error the client can show to the user.
+    assert response.status_code == 200
+    assert response.json() == {"type": "error", "message": "could not connect to Postgres"}
