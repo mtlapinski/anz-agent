@@ -22,8 +22,7 @@ app = FastAPI()
 
 # Idempotent — safe to call on every process startup. Each replica runs this
 # independently; CREATE TABLE IF NOT EXISTS makes concurrent startups safe.
-if os.environ.get("DATABASE_URL"):
-    db.run_migrations()
+db.run_migrations_if_configured()
 
 _graph = build_graph()
 

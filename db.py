@@ -36,3 +36,13 @@ def run_migrations(conn_str: str | None = None) -> None:
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_normalized_query ON searches(normalized_query)")
+
+
+def run_migrations_if_configured() -> None:
+    """Runs run_migrations() only when DATABASE_URL is set (Postgres mode).
+    Idempotent and safe to call on every process startup — every entry point
+    that can be pointed at Postgres (server.py's replicas, main.py's CLI)
+    calls this so the sessions/searches tables exist before first use,
+    regardless of which one happens to run first against a fresh database."""
+    if os.environ.get("DATABASE_URL"):
+        run_migrations()
