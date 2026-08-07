@@ -147,7 +147,10 @@ def _store_postgres(query: str, raw_results: list[dict]) -> None:
                 """
                 INSERT INTO searches (query, normalized_query, raw_results)
                 VALUES (%s, %s, %s)
-                ON CONFLICT (normalized_query) DO UPDATE SET raw_results = EXCLUDED.raw_results
+                ON CONFLICT (normalized_query) DO UPDATE SET
+                    query = EXCLUDED.query,
+                    raw_results = EXCLUDED.raw_results,
+                    created_at = EXCLUDED.created_at
                 """,
                 (query, normalize(query), json.dumps(raw_results)),
             )

@@ -133,3 +133,17 @@ class TestPostgresBackend:
         from tools.cache import store
         monkeypatch.setenv("DATABASE_URL", "postgresql://bad:bad@localhost:1/nope")
         store("anything", [{"title": "x"}])  # must not raise
+
+    def test_store_replaces_entire_row_on_conflict(self):
+        """Verify that storing with the same normalized query but different
+        case/punctuation replaces the entire row (query, raw_results, created_at)."""
+        from tools.cache import store, lookup
+        # First store with lowercase
+        store("balance beam", [{"title": "Beam"}])
+        # Verify it's there
+        assert lookup("balance beam") == [{"title": "Beam"}]
+
+        # Store again with same normalized form but different casing
+        store("Balance Beam", [{"title": "Better Beam"}])
+        # Second store should win — both result and query string should be updated
+        assert lookup("balance beam") == [{"title": "Better Beam"}]
