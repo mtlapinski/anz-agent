@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from langgraph.types import Command
+from starlette.concurrency import run_in_threadpool
 
 from agent import EvalScore
 from graph import build_graph, GraphContext
@@ -91,21 +92,21 @@ def _format_chat_result(result: dict) -> dict:
 
 
 @app.post("/chat")
-def chat(req: ChatRequest) -> dict:
+async def chat(req: ChatRequest) -> dict:
     context = _get_context(req.thread_id)
     try:
-        result = _graph.invoke({"new_message": req.message}, config=_graph_config(req.thread_id), context=context)
+        result = await run_in_threadpool(_graph.invoke, {"new_message": req.message}, config=_graph_config(req.thread_id), context=context)
     except Exception as e:
         return {"type": "error", "message": str(e)}
     return _format_chat_result(result)
 
 
 @app.post("/resume")
-def resume(req: ResumeRequest) -> dict:
+async def resume(req: ResumeRequest) -> dict:
     context = _get_context(req.thread_id)
     score = EvalScore(overall=req.score, note=req.note)
     try:
-        _graph.invoke(Command(resume=score), config=_graph_config(req.thread_id), context=context)
+        await run_in_threadpool(_graph.invoke, Command(resume=score), config=_graph_config(req.thread_id), context=context)
     except Exception as e:
         return {"type": "error", "message": str(e)}
     return {"type": "message", "text": "Thanks for the rating!", "products": None, "view": None}

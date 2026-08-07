@@ -1,4 +1,6 @@
 import pytest
+import time
+import threading
 from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
@@ -184,3 +186,33 @@ def test_chat_checkpointer_error_surfaces_as_explicit_error_not_silent_reset(moc
     # an explicit, visible error the client can show to the user.
     assert response.status_code == 200
     assert response.json() == {"type": "error", "message": "could not connect to Postgres"}
+
+
+@patch("server._graph")
+def test_chat_requests_do_not_serialize_on_slow_graph_invoke(mock_graph, client, isolated_session_store):
+    isolated_session_store["t-slow-1"] = ModelConfig(provider="google", model="m")
+    isolated_session_store["t-slow-2"] = ModelConfig(provider="google", model="m")
+
+    def slow_invoke(*args, **kwargs):
+        time.sleep(0.3)
+        return {"response": "done", "made_tool_call_this_turn": False, "last_search_results": None, "last_search_input": None}
+
+    mock_graph.invoke.side_effect = slow_invoke
+
+    results = []
+
+    def _call(thread_id):
+        with patch("server.create_client", return_value=MagicMock()):
+            r = client.post("/chat", json={"thread_id": thread_id, "message": "hi"})
+            results.append(r.status_code)
+
+    start = time.monotonic()
+    t1 = threading.Thread(target=_call, args=("t-slow-1",))
+    t2 = threading.Thread(target=_call, args=("t-slow-2",))
+    t1.start(); t2.start()
+    t1.join(); t2.join()
+    elapsed = time.monotonic() - start
+
+    assert results == [200, 200]
+    # Serialized would take ~0.6s; concurrent should take ~0.3s. Generous bound for CI jitter.
+    assert elapsed < 0.5
