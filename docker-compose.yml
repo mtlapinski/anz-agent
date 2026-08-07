@@ -25,6 +25,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
 
   app-2:
     build: .
@@ -35,6 +36,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    restart: unless-stopped
 
   nginx:
     image: nginx:1.27-alpine
@@ -45,6 +47,7 @@ services:
     depends_on:
       - app-1
       - app-2
+    restart: unless-stopped
 
 volumes:
   pgdata:

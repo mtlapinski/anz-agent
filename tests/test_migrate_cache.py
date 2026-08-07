@@ -25,7 +25,7 @@ def _schema(postgres_url):
     db.run_migrations(postgres_url)
 
 
-def test_migrate_copies_all_rows(tmp_path, postgres_url):
+def test_migrate_copies_all_rows(tmp_path, postgres_url, monkeypatch):
     from scripts.migrate_cache_to_postgres import migrate
     sqlite_path = str(tmp_path / "cache.db")
     _seed_sqlite(sqlite_path)
@@ -34,8 +34,7 @@ def test_migrate_copies_all_rows(tmp_path, postgres_url):
 
     assert count == 1
     from tools.cache import lookup
-    import os
-    os.environ["DATABASE_URL"] = postgres_url
+    monkeypatch.setenv("DATABASE_URL", postgres_url)
     assert lookup("balance beam") == [{"title": "Beam"}]
 
 

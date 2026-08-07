@@ -201,8 +201,9 @@ def test_healthz_defaults_to_unknown_without_replica_id(client, monkeypatch):
     assert response.json() == {"replica": "unknown"}
 
 
+@patch("server.create_client", return_value=MagicMock())
 @patch("server._graph")
-def test_chat_requests_do_not_serialize_on_slow_graph_invoke(mock_graph, client, isolated_session_store):
+def test_chat_requests_do_not_serialize_on_slow_graph_invoke(mock_graph, mock_create_client, client, isolated_session_store):
     isolated_session_store["t-slow-1"] = ModelConfig(provider="google", model="m")
     isolated_session_store["t-slow-2"] = ModelConfig(provider="google", model="m")
 
@@ -215,9 +216,8 @@ def test_chat_requests_do_not_serialize_on_slow_graph_invoke(mock_graph, client,
     results = []
 
     def _call(thread_id):
-        with patch("server.create_client", return_value=MagicMock()):
-            r = client.post("/chat", json={"thread_id": thread_id, "message": "hi"})
-            results.append(r.status_code)
+        r = client.post("/chat", json={"thread_id": thread_id, "message": "hi"})
+        results.append(r.status_code)
 
     start = time.monotonic()
     t1 = threading.Thread(target=_call, args=("t-slow-1",))

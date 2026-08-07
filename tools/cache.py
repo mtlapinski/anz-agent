@@ -26,7 +26,7 @@ def _shortlist_candidates(query: str, candidates: list[str], k: int = 20) -> lis
         candidate_tokens = set(normalize(candidate).split())
         overlap = len(query_tokens & candidate_tokens)
         scored.append((overlap, candidate))
-    scored.sort(key=lambda pair: pair[0], reverse=True)
+    scored.sort(key=lambda pair: (-pair[0], pair[1]))
     return [candidate for _, candidate in scored[:k]]
 
 

@@ -115,6 +115,17 @@ def test_shortlist_candidates_respects_k():
     assert len(result) == 20
 
 
+def test_shortlist_candidates_breaks_ties_alphabetically():
+    from tools.cache import _shortlist_candidates
+    # All three share the same token overlap with "balance beam" (score 2),
+    # so the tie must be broken deterministically by candidate string.
+    candidates = ["beam balance zebra", "beam balance apple", "beam balance mango"]
+
+    result = _shortlist_candidates("balance beam", candidates, k=2)
+
+    assert result == ["beam balance apple", "beam balance mango"]
+
+
 def test_lookup_sends_only_shortlisted_candidates_to_judge():
     from tools.cache import store, lookup
     for i in range(30):
@@ -164,6 +175,15 @@ class TestPostgresBackend:
         from tools.cache import store
         monkeypatch.setenv("DATABASE_URL", "postgresql://bad:bad@localhost:1/nope")
         store("anything", [{"title": "x"}])  # must not raise
+
+    def test_lookup_uses_judge_for_fuzzy_match(self):
+        from tools.cache import store, lookup
+        store("purple balance beam", [{"title": "Purple Beam"}])
+
+        with patch("tools.cache_judge.find_match", return_value="purple balance beam"):
+            result = lookup("balance beam")
+
+        assert result == [{"title": "Purple Beam"}]
 
     def test_store_replaces_entire_row_on_conflict(self):
         """Verify that storing with the same normalized query but different

@@ -98,7 +98,7 @@ def _format_chat_result(result: dict) -> dict:
 
 @app.post("/chat")
 async def chat(req: ChatRequest) -> dict:
-    context = _get_context(req.thread_id)
+    context = await run_in_threadpool(_get_context, req.thread_id)
     try:
         result = await run_in_threadpool(_graph.invoke, {"new_message": req.message}, config=_graph_config(req.thread_id), context=context)
     except Exception as e:
@@ -108,7 +108,7 @@ async def chat(req: ChatRequest) -> dict:
 
 @app.post("/resume")
 async def resume(req: ResumeRequest) -> dict:
-    context = _get_context(req.thread_id)
+    context = await run_in_threadpool(_get_context, req.thread_id)
     score = EvalScore(overall=req.score, note=req.note)
     try:
         await run_in_threadpool(_graph.invoke, Command(resume=score), config=_graph_config(req.thread_id), context=context)
