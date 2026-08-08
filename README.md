@@ -12,6 +12,8 @@ Describe what you want in plain English. The agent asks clarifying questions, se
 
 ## Architecture
 
+### Agent conversation flow
+
 After a search, the agent pauses to ask you to rate the recommendation before continuing:
 
 ```mermaid
@@ -43,6 +45,62 @@ flowchart LR
     E --> L
     E --> J
 ```
+
+This part of the app — the graph, its nodes, and the eval flow — is identical
+in both deployment modes below; only where state lives changes.
+
+### Deployment: single process vs. scaled (Docker Compose)
+
+Everything that needs shared state — the LangGraph checkpointer, the session
+registry, and the search cache — is gated on one environment variable,
+`DATABASE_URL`. Unset, the app runs exactly as it always has: one process,
+state held in memory or a local SQLite file. Set (as in the Docker Compose
+stack), the same code runs against Postgres instead, which is what makes it
+safe to run more than one replica behind a load balancer.
+
+**Default — `python main.py` / `python server.py`, no `DATABASE_URL`:**
+
+```mermaid
+flowchart LR
+    Client[CLI / Web UI] --> S[server.py<br/>single process]
+    S --> MS[("MemorySaver<br/>in-process, per-thread_id")]
+    S --> SQLite[("SQLite cache<br/>~/.anz-agent/cache.db")]
+    S -.-> LLM[(Anthropic / Google)]
+    S -.->|on cache miss| SerpAPI[(SerpAPI)]
+```
+
+State lives in that one process. Restart it, or run a second instance, and
+sessions/cache don't carry over — fine for local single-user use, the
+failure mode this branch's Docker Compose stack exists to fix.
+
+**Scaled — `docker compose up`, `DATABASE_URL` set:**
+
+```mermaid
+flowchart TD
+    subgraph Compose["Docker Compose"]
+        LB["nginx<br/>load balancer<br/>:8000"]
+        A1[app-1<br/>server.py]
+        A2[app-2<br/>server.py]
+        PG[("Postgres<br/>checkpoints · sessions · cache")]
+    end
+    Client[CLI / Web UI] -->|localhost:8000| LB
+    LB -->|round robin| A1
+    LB -->|round robin| A2
+    A1 --> PG
+    A2 --> PG
+    A1 -.-> LLM[(Anthropic / Google)]
+    A2 -.-> LLM
+    A1 -.->|on cache miss| SerpAPI[(SerpAPI)]
+    A2 -.->|on cache miss| SerpAPI
+```
+
+nginx round-robins between two identical `server.py` replicas; neither holds
+state a request depends on — checkpoints, sessions, and cache all live in
+Postgres, so either replica can serve any request for any `thread_id`, and a
+crashed replica (nginx routes around it) or a restart doesn't lose in-flight
+conversations. See "Running the scaled stack locally" below to try it, and
+[docs/superpowers/specs/2026-08-06-local-scaling-environment-design.md](docs/superpowers/specs/2026-08-06-local-scaling-environment-design.md)
+for the full design rationale.
 
 ## Setup
 
