@@ -6,18 +6,25 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from langgraph.types import Command
+from starlette.concurrency import run_in_threadpool
 
+import db
 from agent import EvalScore
 from graph import build_graph, GraphContext
 from llm import ModelConfig, create_client
 from main import PROVIDER_KEYS
+from tools import session_store
+from tools.session_store import SessionNotFound
 
 load_dotenv()
 
 app = FastAPI()
 
+# Idempotent — safe to call on every process startup. Each replica runs this
+# independently; CREATE TABLE IF NOT EXISTS makes concurrent startups safe.
+db.run_migrations_if_configured()
+
 _graph = build_graph()
-_sessions: dict[str, GraphContext] = {}
 
 
 class SessionRequest(BaseModel):
@@ -48,7 +55,7 @@ def create_session(req: SessionRequest) -> SessionResponse:
 
     config = ModelConfig(provider=req.provider, model=req.model)
     thread_id = str(uuid.uuid4())
-    _sessions[thread_id] = GraphContext(client=create_client(config), model_config=config)
+    session_store.create_session(thread_id, config)
     return SessionResponse(thread_id=thread_id)
 
 
@@ -57,10 +64,11 @@ def _graph_config(thread_id: str) -> dict:
 
 
 def _get_context(thread_id: str) -> GraphContext:
-    context = _sessions.get(thread_id)
-    if context is None:
+    try:
+        config = session_store.get_session(thread_id)
+    except SessionNotFound:
         raise HTTPException(status_code=404, detail="unknown thread_id")
-    return context
+    return GraphContext(client=create_client(config), model_config=config)
 
 
 def _format_chat_result(result: dict) -> dict:
@@ -89,24 +97,29 @@ def _format_chat_result(result: dict) -> dict:
 
 
 @app.post("/chat")
-def chat(req: ChatRequest) -> dict:
-    context = _get_context(req.thread_id)
+async def chat(req: ChatRequest) -> dict:
+    context = await run_in_threadpool(_get_context, req.thread_id)
     try:
-        result = _graph.invoke({"new_message": req.message}, config=_graph_config(req.thread_id), context=context)
+        result = await run_in_threadpool(_graph.invoke, {"new_message": req.message}, config=_graph_config(req.thread_id), context=context)
     except Exception as e:
         return {"type": "error", "message": str(e)}
     return _format_chat_result(result)
 
 
 @app.post("/resume")
-def resume(req: ResumeRequest) -> dict:
-    context = _get_context(req.thread_id)
+async def resume(req: ResumeRequest) -> dict:
+    context = await run_in_threadpool(_get_context, req.thread_id)
     score = EvalScore(overall=req.score, note=req.note)
     try:
-        _graph.invoke(Command(resume=score), config=_graph_config(req.thread_id), context=context)
+        await run_in_threadpool(_graph.invoke, Command(resume=score), config=_graph_config(req.thread_id), context=context)
     except Exception as e:
         return {"type": "error", "message": str(e)}
     return {"type": "message", "text": "Thanks for the rating!", "products": None, "view": None}
+
+
+@app.get("/healthz")
+def healthz() -> dict:
+    return {"replica": os.environ.get("REPLICA_ID", "unknown")}
 
 
 if __name__ == "__main__":
