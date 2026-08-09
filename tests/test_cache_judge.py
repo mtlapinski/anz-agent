@@ -167,3 +167,4 @@ def test_find_match_fails_open_when_span_update_raises(mock_llm, mock_get_langfu
     result = cache_judge.find_match("kettlebell", ["yoga mat"], trace_id="trace-123")
 
     assert result == CacheMatch("yoga mat", "matched")
+    mock_span.end.assert_called_once()

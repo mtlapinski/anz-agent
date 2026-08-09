@@ -61,6 +61,9 @@ def find_match(query: str, candidates: list[str], trace_id: str | None = None) -
                 "outcome": result.outcome,
                 "attempts": attempts_used,
             })
+        except Exception:
+            pass
+        try:
             span.end()
         except Exception:
             pass
