@@ -14,7 +14,7 @@ def reset_singleton():
 @patch.dict(os.environ, {
     "LANGFUSE_PUBLIC_KEY": "pk-test",
     "LANGFUSE_SECRET_KEY": "sk-test",
-})
+}, clear=True)
 @patch("tracing.Langfuse")
 def test_get_langfuse_constructs_client_from_env(mock_langfuse_class):
     import tracing
@@ -34,7 +34,7 @@ def test_get_langfuse_constructs_client_from_env(mock_langfuse_class):
     "LANGFUSE_PUBLIC_KEY": "pk-test",
     "LANGFUSE_SECRET_KEY": "sk-test",
     "LANGFUSE_HOST": "https://self-hosted.example.com",
-})
+}, clear=True)
 @patch("tracing.Langfuse")
 def test_get_langfuse_respects_custom_host(mock_langfuse_class):
     import tracing
@@ -50,7 +50,7 @@ def test_get_langfuse_respects_custom_host(mock_langfuse_class):
 @patch.dict(os.environ, {
     "LANGFUSE_PUBLIC_KEY": "pk-test",
     "LANGFUSE_SECRET_KEY": "sk-test",
-})
+}, clear=True)
 @patch("tracing.Langfuse")
 def test_get_langfuse_is_a_singleton(mock_langfuse_class):
     import tracing
