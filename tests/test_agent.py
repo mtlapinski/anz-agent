@@ -14,7 +14,16 @@ def test_run_tool_search_amazon():
         mock_search.return_value = {"products": []}
         result = run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5})
     assert json.loads(result) == {"products": []}
-    mock_search.assert_called_once_with(query="laptop", optimize_for="price", max_results=5)
+    mock_search.assert_called_once_with(query="laptop", optimize_for="price", max_results=5, trace_id=None)
+
+
+def test_run_tool_forwards_trace_id_to_search_amazon():
+    from agent import run_tool
+    with patch("agent.search_amazon") as mock_search, patch("agent._get_langfuse"):
+        mock_search.return_value = {"products": []}
+        run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5},
+                  trace_id="trace-123")
+    mock_search.assert_called_once_with(query="laptop", optimize_for="price", max_results=5, trace_id="trace-123")
 
 
 def test_run_tool_unknown_raises():

@@ -82,7 +82,7 @@ def run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None) -> s
                 )
             except Exception:
                 span = None
-        result = search_amazon(**tool_input)
+        result = search_amazon(**tool_input, trace_id=trace_id)
         if span:
             try:
                 span.update(output=result)
