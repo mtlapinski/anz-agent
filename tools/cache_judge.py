@@ -1,5 +1,7 @@
 from __future__ import annotations
+from dataclasses import dataclass
 import llm
+from tracing import get_langfuse
 
 JUDGE_MODEL_CONFIG = llm.ModelConfig(provider="google", model="gemini-flash-lite-latest")
 
@@ -27,24 +29,68 @@ def _get_client():
     return _client
 
 
-def find_match(query: str, candidates: list[str]) -> str | None:
+@dataclass
+class CacheMatch:
+    matched_query: str | None   # cached query text if judge found a match, else None
+    outcome: str                 # "matched" | "no_match" | "error"
+
+
+def find_match(query: str, candidates: list[str], trace_id: str | None = None) -> CacheMatch:
     if not candidates:
-        return None
+        return CacheMatch(None, "no_match")
 
-    try:
-        candidate_list = "\n".join(f"- {c}" for c in candidates)
-        user_message = f"New query: {query}\n\nCached queries:\n{candidate_list}"
-        response = llm.complete(
-            _get_client(),
-            JUDGE_MODEL_CONFIG,
-            SYSTEM_PROMPT,
-            [],
-            [{"role": "user", "content": user_message}],
-        )
-        answer = (response.text or "").strip()
-    except Exception:
-        return None
+    span = None
+    if trace_id:
+        try:
+            span = get_langfuse().start_observation(
+                trace_context={"trace_id": trace_id},
+                name="cache_judge",
+                as_type="generation",
+                input={"query": query, "candidates": candidates},
+                model=f"{JUDGE_MODEL_CONFIG.provider}/{JUDGE_MODEL_CONFIG.model}",
+            )
+        except Exception:
+            span = None
 
-    if answer not in candidates:
-        return None
-    return answer
+    result, attempts_used = _run_attempts(query, candidates)
+
+    if span:
+        try:
+            span.update(output={
+                "matched_query": result.matched_query,
+                "outcome": result.outcome,
+                "attempts": attempts_used,
+            })
+            span.end()
+        except Exception:
+            pass
+
+    return result
+
+
+def _run_attempts(query: str, candidates: list[str]) -> tuple[CacheMatch, int]:
+    candidate_list = "\n".join(f"- {c}" for c in candidates)
+    user_message = f"New query: {query}\n\nCached queries:\n{candidate_list}"
+
+    attempts_used = 0
+    for attempt in range(2):
+        attempts_used = attempt + 1
+        try:
+            response = llm.complete(
+                _get_client(),
+                JUDGE_MODEL_CONFIG,
+                SYSTEM_PROMPT,
+                [],
+                [{"role": "user", "content": user_message}],
+            )
+            answer = (response.text or "").strip()
+        except Exception:
+            continue
+
+        if answer == "NONE":
+            return CacheMatch(None, "no_match"), attempts_used
+        if answer in candidates:
+            return CacheMatch(answer, "matched"), attempts_used
+        # malformed/hallucinated answer — falls through, retried if attempts remain
+
+    return CacheMatch(None, "error"), attempts_used
