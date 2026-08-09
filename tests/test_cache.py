@@ -1,6 +1,8 @@
 import pytest
 from unittest.mock import patch
 
+from tools.cache_judge import CacheMatch
+
 
 def test_normalize_ignores_word_order_and_case():
     from tools.cache import normalize
@@ -61,7 +63,7 @@ def test_lookup_uses_judge_for_fuzzy_match():
     from tools.cache import store, lookup
     store("purple balance beam", [{"title": "Purple Beam"}])
 
-    with patch("tools.cache_judge.find_match", return_value="purple balance beam"):
+    with patch("tools.cache_judge_client.find_match", return_value=CacheMatch("purple balance beam", "matched")):
         result = lookup("balance beam")
 
     assert result == [{"title": "Purple Beam"}]
@@ -71,7 +73,7 @@ def test_lookup_returns_none_when_judge_finds_no_match():
     from tools.cache import store, lookup
     store("yoga mat", [{"title": "Mat"}])
 
-    with patch("tools.cache_judge.find_match", return_value=None):
+    with patch("tools.cache_judge_client.find_match", return_value=CacheMatch(None, "no_match")):
         result = lookup("kettlebell")
 
     assert result is None
@@ -80,7 +82,7 @@ def test_lookup_returns_none_when_judge_finds_no_match():
 def test_lookup_does_not_call_judge_when_cache_empty():
     from tools.cache import lookup
 
-    with patch("tools.cache_judge.find_match") as mock_find_match:
+    with patch("tools.cache_judge_client.find_match") as mock_find_match:
         result = lookup("anything")
 
     assert result is None
@@ -91,7 +93,7 @@ def test_lookup_returns_none_when_judge_raises():
     from tools.cache import store, lookup
     store("yoga mat", [{"title": "Mat"}])
 
-    with patch("tools.cache_judge.find_match", side_effect=Exception("boom")):
+    with patch("tools.cache_judge_client.find_match", side_effect=Exception("boom")):
         result = lookup("kettlebell")
 
     assert result is None
@@ -132,11 +134,33 @@ def test_lookup_sends_only_shortlisted_candidates_to_judge():
         store(f"unrelated product {i}", [{"title": f"p{i}"}])
     store("purple balance beam", [{"title": "Purple Beam"}])
 
-    with patch("tools.cache_judge.find_match", return_value=None) as mock_find_match:
+    with patch("tools.cache_judge_client.find_match", return_value=CacheMatch(None, "no_match")) as mock_find_match:
         lookup("balance beam")
 
     args, _ = mock_find_match.call_args
     assert len(args[1]) <= 20
+
+
+def test_lookup_forwards_trace_id_to_judge():
+    from tools.cache import store, lookup
+    store("yoga mat", [{"title": "Mat"}])
+
+    with patch("tools.cache_judge_client.find_match", return_value=CacheMatch(None, "no_match")) as mock_find_match:
+        lookup("kettlebell", trace_id="trace-123")
+
+    _, kwargs = mock_find_match.call_args
+    assert kwargs["trace_id"] == "trace-123"
+
+
+def test_lookup_forwards_none_trace_id_by_default():
+    from tools.cache import store, lookup
+    store("yoga mat", [{"title": "Mat"}])
+
+    with patch("tools.cache_judge_client.find_match", return_value=CacheMatch(None, "no_match")) as mock_find_match:
+        lookup("kettlebell")
+
+    _, kwargs = mock_find_match.call_args
+    assert kwargs["trace_id"] is None
 
 
 class TestPostgresBackend:
@@ -180,7 +204,7 @@ class TestPostgresBackend:
         from tools.cache import store, lookup
         store("purple balance beam", [{"title": "Purple Beam"}])
 
-        with patch("tools.cache_judge.find_match", return_value="purple balance beam"):
+        with patch("tools.cache_judge_client.find_match", return_value=CacheMatch("purple balance beam", "matched")):
             result = lookup("balance beam")
 
         assert result == [{"title": "Purple Beam"}]
