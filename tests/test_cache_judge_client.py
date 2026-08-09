@@ -105,3 +105,47 @@ def test_find_match_never_falls_back_to_in_process_on_network_failure(monkeypatc
         cache_judge_client.find_match("kettlebell", ["yoga mat"])
 
     mock_in_process.assert_not_called()
+
+
+@patch("tools.cache_judge_client.get_langfuse")
+def test_find_match_opens_and_ends_langfuse_span_on_network_failure_with_trace_id(mock_get_langfuse, monkeypatch):
+    monkeypatch.setenv("CACHE_JUDGE_URL", "http://judge:8001/match")
+    mock_span = MagicMock()
+    mock_get_langfuse.return_value.start_observation.return_value = mock_span
+
+    with patch.object(httpx.Client, "post", side_effect=httpx.ConnectError("refused")):
+        result = cache_judge_client.find_match("kettlebell", ["yoga mat"], trace_id="trace-1")
+
+    mock_get_langfuse.return_value.start_observation.assert_called_once_with(
+        trace_context={"trace_id": "trace-1"},
+        name="cache_judge",
+        as_type="generation",
+        input={"query": "kettlebell", "candidates": ["yoga mat"]},
+    )
+    mock_span.update.assert_called_once_with(
+        output={"matched_query": None, "outcome": "error", "transport": "network"}
+    )
+    mock_span.end.assert_called_once()
+    assert result == CacheMatch(None, "error")
+
+
+@patch("tools.cache_judge_client.get_langfuse")
+def test_find_match_network_failure_with_no_trace_id_skips_langfuse(mock_get_langfuse, monkeypatch):
+    monkeypatch.setenv("CACHE_JUDGE_URL", "http://judge:8001/match")
+
+    with patch.object(httpx.Client, "post", side_effect=httpx.ConnectError("refused")):
+        result = cache_judge_client.find_match("kettlebell", ["yoga mat"])
+
+    mock_get_langfuse.assert_not_called()
+    assert result == CacheMatch(None, "error")
+
+
+@patch("tools.cache_judge_client.get_langfuse")
+def test_find_match_fails_open_when_langfuse_itself_fails_during_network_error_handling(mock_get_langfuse, monkeypatch):
+    monkeypatch.setenv("CACHE_JUDGE_URL", "http://judge:8001/match")
+    mock_get_langfuse.return_value.start_observation.side_effect = Exception("langfuse down")
+
+    with patch.object(httpx.Client, "post", side_effect=httpx.ConnectError("refused")):
+        result = cache_judge_client.find_match("kettlebell", ["yoga mat"], trace_id="trace-1")
+
+    assert result == CacheMatch(None, "error")
