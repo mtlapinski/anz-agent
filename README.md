@@ -82,6 +82,7 @@ flowchart TD
         A1[app-1<br/>server.py]
         A2[app-2<br/>server.py]
         PG[("Postgres<br/>checkpoints · sessions · cache")]
+        J[judge<br/>judge_service.py]
     end
     Client[CLI / Web UI] -->|localhost:8000| LB
     LB -->|round robin| A1
@@ -92,6 +93,8 @@ flowchart TD
     A2 -.-> LLM
     A1 -.->|on cache miss| SerpAPI[(SerpAPI)]
     A2 -.->|on cache miss| SerpAPI
+    A1 -.->|CACHE_JUDGE_URL| J
+    A2 -.->|CACHE_JUDGE_URL| J
 ```
 
 nginx round-robins between two identical `server.py` replicas; neither holds
@@ -185,6 +188,16 @@ To bring an existing local SQLite cache (`~/.anz-agent/cache.db`) along, run
 scripts/migrate_cache_to_postgres.py` once, against the Compose stack's
 exposed Postgres port.
 
+`docker-compose.yml` also starts a `judge` service and sets
+`CACHE_JUDGE_URL=http://judge:8001/match` on `app-1`/`app-2`, so the
+Compose stack's cache-matching judge calls happen over the network to that
+standalone service instead of in-process. Unset `CACHE_JUDGE_URL` (or run
+`python main.py`/`python server.py` directly, outside Compose) and the
+judge call falls back to running in-process — today's behavior, unchanged.
+This is a rollback-able canary: if the network judge misbehaves, removing
+`CACHE_JUDGE_URL` from `app-1`/`app-2`'s environment in `docker-compose.yml`
+reverts to the in-process path with no other code changes.
+
 ## Configuration
 
 | Variable | Required for |
@@ -195,6 +208,7 @@ exposed Postgres port.
 | `LANGFUSE_PUBLIC_KEY` | No — optional observability |
 | `LANGFUSE_SECRET_KEY` | No — optional observability |
 | `LANGFUSE_HOST` | No — defaults to Langfuse cloud |
+| `CACHE_JUDGE_URL` | No — defaults to running the search cache's judge in-process; when set, routes judge calls over HTTP to the URL instead |
 
 ## Testing
 
@@ -227,7 +241,10 @@ searches by a small LLM judge (`tools/cache_judge.py`) that decides if a
 prior search is a close enough match to reuse (e.g. "balance beam" reusing
 "purple balance beam" results). Entries never expire — delete
 `~/.anz-agent/cache.db` (SQLite) or the `searches` table (Postgres) to clear
-the cache manually.
+the cache manually. The judge call can run in-process or, when
+`CACHE_JUDGE_URL` is set (as in the Docker Compose stack), over the network
+to a standalone `judge_service.py` instance — same decision logic, same
+model, just a different call boundary.
 
 ## Models
 
@@ -247,10 +264,13 @@ anz-agent/
 ├── agent.py         # LLM prompt/tools, Langfuse tracing, eval scoring
 ├── server.py        # FastAPI backend for the web UI — /session, /chat, /resume
 ├── db.py             # Postgres connection helper + schema migrations, used when DATABASE_URL is set
+├── tracing.py         # Shared Langfuse client singleton, used by agent.py and tools/cache_judge.py
+├── judge_service.py   # Standalone FastAPI wrapper around tools/cache_judge.py, run by the judge Compose service
 ├── tools/
 │   ├── amazon.py       # SerpAPI search tool, checks the local cache first
 │   ├── cache.py         # Search result cache — SQLite by default, Postgres when DATABASE_URL is set
-│   ├── cache_judge.py   # LLM subagent that fuzzy-matches queries against the cache
+│   ├── cache_judge.py   # LLM subagent that fuzzy-matches queries against the cache — the judge itself
+│   ├── cache_judge_client.py # Dispatcher — calls the judge in-process or over the network depending on CACHE_JUDGE_URL
 │   └── session_store.py # Session config storage — Postgres-backed when DATABASE_URL is set
 ├── scripts/
 │   └── migrate_cache_to_postgres.py  # One-time migration of the local SQLite cache into Postgres
@@ -258,7 +278,7 @@ anz-agent/
 ├── tests/
 ├── evals/           # scores.jsonl — eval ratings (gitignored)
 ├── Dockerfile         # Container image for server.py, used by docker-compose.yml
-├── docker-compose.yml # Local 2-replica + nginx + Postgres stack (see below)
+├── docker-compose.yml # Local 2-replica + nginx + Postgres + judge stack (see below)
 ├── nginx.conf          # Load-balancer config for the docker-compose stack
 ├── .env.example
 └── requirements.txt

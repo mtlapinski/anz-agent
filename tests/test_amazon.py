@@ -200,8 +200,22 @@ def test_search_stores_raw_results_after_live_call(mock_search_class):
          patch("tools.cache.store") as mock_store:
         search_amazon(query="laptop", optimize_for="price", max_results=5)
 
-    mock_lookup.assert_called_once_with("laptop")
+    mock_lookup.assert_called_once_with("laptop", trace_id=None)
     mock_store.assert_called_once_with("laptop", [make_mock_result(title="Fresh Laptop")])
+
+
+@patch.dict(os.environ, {"SERPAPI_KEY": "fake_key"})
+@patch("tools.amazon.GoogleSearch")
+def test_search_forwards_trace_id_to_cache_lookup(mock_search_class):
+    mock_search_class.return_value.get_dict.return_value = {"organic_results": []}
+
+    from tools.amazon import search_amazon
+
+    with patch("tools.cache.lookup", return_value=None) as mock_lookup, \
+         patch("tools.cache.store"):
+        search_amazon(query="laptop", optimize_for="price", max_results=5, trace_id="trace-123")
+
+    mock_lookup.assert_called_once_with("laptop", trace_id="trace-123")
 
 
 @patch.dict(os.environ, {"SERPAPI_KEY": "fake_key"})
