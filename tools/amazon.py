@@ -10,13 +10,15 @@ def search_amazon(
     max_results: int = 10,
     max_price: Optional[float] = None,
     view: Optional[str] = None,
+    trace_id: Optional[str] = None,
 ) -> dict:
     """
     Search Amazon via SerpAPI, via a local cache when available. optimize_for is
     passed through from the agent and used by the caller to rank results — not
-    applied here.
+    applied here. trace_id, when given, is forwarded to the cache's fuzzy-match
+    judge so its Langfuse span lands in the same trace as the rest of the turn.
     """
-    raw_items = cache.lookup(query)
+    raw_items = cache.lookup(query, trace_id=trace_id)
 
     if raw_items is None:
         params = {

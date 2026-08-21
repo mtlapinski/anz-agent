@@ -94,6 +94,7 @@ flowchart TD
         A1[app-1<br/>server.py]
         A2[app-2<br/>server.py]
         PG[("Postgres<br/>checkpoints · sessions · cache")]
+        J[judge<br/>judge_service.py]
     end
     Client[CLI / Web UI] -->|localhost:8000| LB
     LB -->|round robin| A1
@@ -104,6 +105,8 @@ flowchart TD
     A2 -.-> LLM
     A1 -.->|on cache miss| SerpAPI[(SerpAPI)]
     A2 -.->|on cache miss| SerpAPI
+    A1 -.->|CACHE_JUDGE_URL| J
+    A2 -.->|CACHE_JUDGE_URL| J
 ```
 
 nginx round-robins between two identical `server.py` replicas; neither holds
@@ -197,6 +200,16 @@ To bring an existing local SQLite cache (`~/.anz-agent/cache.db`) along, run
 scripts/migrate_cache_to_postgres.py` once, against the Compose stack's
 exposed Postgres port.
 
+`docker-compose.yml` also starts a `judge` service and sets
+`CACHE_JUDGE_URL=http://judge:8001/match` on `app-1`/`app-2`, so the
+Compose stack's cache-matching judge calls happen over the network to that
+standalone service instead of in-process. Unset `CACHE_JUDGE_URL` (or run
+`python main.py`/`python server.py` directly, outside Compose) and the
+judge call falls back to running in-process — today's behavior, unchanged.
+This is a rollback-able canary: if the network judge misbehaves, removing
+`CACHE_JUDGE_URL` from `app-1`/`app-2`'s environment in `docker-compose.yml`
+reverts to the in-process path with no other code changes.
+
 ## Configuration
 
 | Variable | Required for |
@@ -207,6 +220,7 @@ exposed Postgres port.
 | `LANGFUSE_PUBLIC_KEY` | No — optional observability |
 | `LANGFUSE_SECRET_KEY` | No — optional observability |
 | `LANGFUSE_HOST` | No — defaults to Langfuse cloud |
+| `CACHE_JUDGE_URL` | No — defaults to running the search cache's judge in-process; when set, routes judge calls over HTTP to the URL instead |
 
 ## Testing
 
@@ -240,15 +254,19 @@ flowchart TD
     N -->|no| D{any queries<br/>cached at all?}
     D -->|no| API[SerpAPI call]
     D -->|yes| SL["_shortlist_candidates()<br/>top 20 by token overlap"]
-    SL --> CJ[["cache-judge subagent<br/>tools/cache_judge.py<br/>fixed model: gemini-flash-lite-latest"]]
+    SL --> CL["cache_judge_client.find_match()<br/>tools/cache_judge_client.py"]
+    CL -->|"CACHE_JUDGE_URL unset (default)"| CJ[["cache-judge subagent<br/>tools/cache_judge.py, in-process<br/>fixed model: gemini-flash-lite-latest"]]
+    CL -->|"CACHE_JUDGE_URL set<br/>(Docker Compose)"| SVC["judge_service.py<br/>standalone FastAPI, POST /match"]
+    SVC --> CJ
     CJ -->|match found| Hit
-    CJ -->|"NONE"| API
+    CJ -->|"NONE / network error"| API
     API --> Store["cache.store(query, raw_results)"]
     Hit --> Filt["_build_products()<br/>filter by max_price / max_results"]
     Store --> Filt
     Filt --> Products[products returned to agent]
 
     style CJ fill:#f9e79f,stroke:#b7950b
+    style SVC fill:#dcecec,stroke:#2f6e72
 ```
 
 By default (no `DATABASE_URL` set) `cache.lookup`/`cache.store` read and
@@ -258,9 +276,12 @@ replicas — `search_amazon` and the diagram above are unaware which backend
 is active. An exact reworded/reordered query (e.g. "balance beam purple" vs.
 "purple balance beam") reuses the cache directly with no LLM call; other
 queries are shortlisted by token overlap (top 20, to bound the judge's
-prompt size as the cache grows) and handed to the cache-judge subagent,
-which decides if a prior search is a close enough match to reuse (e.g.
-"balance beam" reusing "purple balance beam" results). Entries never
+prompt size as the cache grows) and handed to `cache_judge_client`, which
+picks the same judge's call boundary the same way `DATABASE_URL` picks the
+cache backend: in-process by default, or — when `CACHE_JUDGE_URL` is set,
+as in the Docker Compose stack — over the network to the standalone `judge`
+service, treating a network error the same as no match (falls back to a
+fresh SerpAPI search rather than failing the request). Entries never
 expire — delete `~/.anz-agent/cache.db` (SQLite) or the `searches` table
 (Postgres) to clear the cache manually.
 
@@ -282,10 +303,13 @@ anz-agent/
 ├── agent.py         # LLM prompt/tools, Langfuse tracing, eval scoring
 ├── server.py        # FastAPI backend for the web UI — /session, /chat, /resume
 ├── db.py             # Postgres connection helper + schema migrations, used when DATABASE_URL is set
+├── tracing.py         # Shared Langfuse client singleton, used by agent.py and tools/cache_judge.py
+├── judge_service.py   # Standalone FastAPI wrapper around tools/cache_judge.py, run by the judge Compose service
 ├── tools/
 │   ├── amazon.py       # SerpAPI search tool, checks the local cache first
 │   ├── cache.py         # Search result cache — SQLite by default, Postgres when DATABASE_URL is set
-│   ├── cache_judge.py   # LLM subagent that fuzzy-matches queries against the cache
+│   ├── cache_judge.py   # LLM subagent that fuzzy-matches queries against the cache — the judge itself
+│   ├── cache_judge_client.py # Dispatcher — calls the judge in-process or over the network depending on CACHE_JUDGE_URL
 │   └── session_store.py # Session config storage — Postgres-backed when DATABASE_URL is set
 ├── scripts/
 │   └── migrate_cache_to_postgres.py  # One-time migration of the local SQLite cache into Postgres
@@ -293,7 +317,7 @@ anz-agent/
 ├── tests/
 ├── evals/           # scores.jsonl — eval ratings (gitignored)
 ├── Dockerfile         # Container image for server.py, used by docker-compose.yml
-├── docker-compose.yml # Local 2-replica + nginx + Postgres stack (see below)
+├── docker-compose.yml # Local 2-replica + nginx + Postgres + judge stack (see below)
 ├── nginx.conf          # Load-balancer config for the docker-compose stack
 ├── .env.example
 └── requirements.txt

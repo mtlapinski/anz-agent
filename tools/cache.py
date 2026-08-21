@@ -6,7 +6,7 @@ import sqlite3
 from datetime import datetime, timezone
 
 import db as db_module
-from tools import cache_judge
+from tools import cache_judge_client
 
 DB_PATH = os.path.expanduser("~/.anz-agent/cache.db")
 
@@ -34,8 +34,8 @@ def _using_postgres() -> bool:
     return bool(os.environ.get("DATABASE_URL"))
 
 
-def lookup(query: str) -> list[dict] | None:
-    return _lookup_postgres(query) if _using_postgres() else _lookup_sqlite(query)
+def lookup(query: str, trace_id: str | None = None) -> list[dict] | None:
+    return _lookup_postgres(query, trace_id) if _using_postgres() else _lookup_sqlite(query, trace_id)
 
 
 def store(query: str, raw_results: list[dict]) -> None:
@@ -65,7 +65,7 @@ def _connect_sqlite() -> sqlite3.Connection:
     return conn
 
 
-def _lookup_sqlite(query: str) -> list[dict] | None:
+def _lookup_sqlite(query: str, trace_id: str | None = None) -> list[dict] | None:
     try:
         conn = _connect_sqlite()
         try:
@@ -81,12 +81,12 @@ def _lookup_sqlite(query: str) -> list[dict] | None:
                 return None
 
             shortlist = _shortlist_candidates(query, candidates)
-            matched_query = cache_judge.find_match(query, shortlist)
-            if matched_query is None:
+            match = cache_judge_client.find_match(query, shortlist, trace_id=trace_id)
+            if match.matched_query is None:
                 return None
 
             row = conn.execute(
-                "SELECT raw_results FROM searches WHERE query = ?", (matched_query,)
+                "SELECT raw_results FROM searches WHERE query = ?", (match.matched_query,)
             ).fetchone()
             return json.loads(row[0]) if row else None
         finally:
@@ -113,7 +113,7 @@ def _store_sqlite(query: str, raw_results: list[dict]) -> None:
 
 # --- Postgres path (used when DATABASE_URL is set) ---
 
-def _lookup_postgres(query: str) -> list[dict] | None:
+def _lookup_postgres(query: str, trace_id: str | None = None) -> list[dict] | None:
     try:
         with db_module.get_connection() as conn:
             normalized = normalize(query)
@@ -128,12 +128,12 @@ def _lookup_postgres(query: str) -> list[dict] | None:
                 return None
 
             shortlist = _shortlist_candidates(query, candidates)
-            matched_query = cache_judge.find_match(query, shortlist)
-            if matched_query is None:
+            match = cache_judge_client.find_match(query, shortlist, trace_id=trace_id)
+            if match.matched_query is None:
                 return None
 
             row = conn.execute(
-                "SELECT raw_results FROM searches WHERE query = %s", (matched_query,)
+                "SELECT raw_results FROM searches WHERE query = %s", (match.matched_query,)
             ).fetchone()
             return row[0] if row else None
     except Exception:
