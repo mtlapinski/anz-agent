@@ -14,7 +14,8 @@ Describe what you want in plain English. The agent asks clarifying questions, se
 
 ### Agent conversation flow
 
-After a search, the agent pauses to ask you to rate the recommendation before continuing:
+After a search, the agent's recommendation is scored twice — once by an LLM
+judge, automatically, then by you — before the turn ends:
 
 ```mermaid
 flowchart LR
@@ -23,12 +24,14 @@ flowchart LR
     end
     subgraph SG["LangGraph StateGraph (graph.py)"]
         A[agent<br/>calls the LLM]
-        T[tools<br/>runs search_amazon]
-        E[eval<br/>interrupt for rating]
+        T["tools<br/>runs search_amazon<br/>(cache + cache-judge subagent —<br/>see Search cache below)"]
+        J["judge<br/>LLM subagent, same model config<br/>scores relevance / fit / quality"]
+        E[eval<br/>interrupt for human rating]
         END([END])
         A -->|tool call| T
         T -->|loop back| A
-        A -->|recommendation ready| E
+        A -->|recommendation ready| J
+        J -->|judge_score| E
         A -->|no tool call| END
     end
     subgraph Human
@@ -36,15 +39,24 @@ flowchart LR
     end
     subgraph Storage["agent.py"]
         L[(Langfuse v4<br/>create_score)]
-        J[(evals/scores.jsonl)]
+        SC[(evals/scores.jsonl)]
     end
 
     M --> A
     E -->|interrupt value| P
     P -->|"Command(resume=score)"| E
     E --> L
-    E --> J
+    E --> SC
 ```
+
+Two distinct subagents show up in this codebase, easy to conflate since both
+are called "judge": the **eval judge** above (`agent.judge_recommendation`,
+`graph.py`'s `judge` node) scores every recommendation automatically on the
+main conversation's own model, alongside your 1-5 rating; the **cache
+judge** (`tools/cache_judge.py`) is unrelated — a separate, fixed cheap-model
+subagent that only fires on a cache miss, decides whether a new search query
+is close enough to a previously cached one to reuse its results. See
+"Search cache" below for that one's flow.
 
 This part of the app — the graph, its nodes, and the eval flow — is identical
 in both deployment modes below; only where state lives changes.
@@ -231,20 +243,47 @@ Add this to your shell profile or set it before running pytest if you encounter 
 
 ## Search cache
 
-`search_amazon` caches results to conserve the SerpAPI free-tier quota. By
-default (no `DATABASE_URL` set) it caches locally in `~/.anz-agent/cache.db`
-(SQLite); when `DATABASE_URL` is set (as in the Docker Compose stack) it
-caches in Postgres instead, shared across replicas. An exact
-reworded/reordered query (e.g. "balance beam purple" vs. "purple balance
-beam") reuses the cache directly; other queries are checked against past
-searches by a small LLM judge (`tools/cache_judge.py`) that decides if a
-prior search is a close enough match to reuse (e.g. "balance beam" reusing
-"purple balance beam" results). Entries never expire — delete
-`~/.anz-agent/cache.db` (SQLite) or the `searches` table (Postgres) to clear
-the cache manually. The judge call can run in-process or, when
-`CACHE_JUDGE_URL` is set (as in the Docker Compose stack), over the network
-to a standalone `judge_service.py` instance — same decision logic, same
-model, just a different call boundary.
+`search_amazon` caches results to conserve the SerpAPI free-tier quota, via
+`tools/cache.py`, called on every search before SerpAPI:
+
+```mermaid
+flowchart TD
+    S["search_amazon()<br/>tools/amazon.py"] --> L["cache.lookup(query)"]
+    L --> N{"normalized query<br/>exact match?"}
+    N -->|yes| Hit[reuse cached raw results]
+    N -->|no| D{any queries<br/>cached at all?}
+    D -->|no| API[SerpAPI call]
+    D -->|yes| SL["_shortlist_candidates()<br/>top 20 by token overlap"]
+    SL --> CL["cache_judge_client.find_match()<br/>tools/cache_judge_client.py"]
+    CL -->|"CACHE_JUDGE_URL unset (default)"| CJ[["cache-judge subagent<br/>tools/cache_judge.py, in-process<br/>fixed model: gemini-flash-lite-latest"]]
+    CL -->|"CACHE_JUDGE_URL set<br/>(Docker Compose)"| SVC["judge_service.py<br/>standalone FastAPI, POST /match"]
+    SVC --> CJ
+    CJ -->|match found| Hit
+    CJ -->|"NONE / network error"| API
+    API --> Store["cache.store(query, raw_results)"]
+    Hit --> Filt["_build_products()<br/>filter by max_price / max_results"]
+    Store --> Filt
+    Filt --> Products[products returned to agent]
+
+    style CJ fill:#f9e79f,stroke:#b7950b
+    style SVC fill:#dcecec,stroke:#2f6e72
+```
+
+By default (no `DATABASE_URL` set) `cache.lookup`/`cache.store` read and
+write `~/.anz-agent/cache.db` (SQLite); when `DATABASE_URL` is set (as in
+the Docker Compose stack) they hit Postgres instead, shared across
+replicas — `search_amazon` and the diagram above are unaware which backend
+is active. An exact reworded/reordered query (e.g. "balance beam purple" vs.
+"purple balance beam") reuses the cache directly with no LLM call; other
+queries are shortlisted by token overlap (top 20, to bound the judge's
+prompt size as the cache grows) and handed to `cache_judge_client`, which
+picks the same judge's call boundary the same way `DATABASE_URL` picks the
+cache backend: in-process by default, or — when `CACHE_JUDGE_URL` is set,
+as in the Docker Compose stack — over the network to the standalone `judge`
+service, treating a network error the same as no match (falls back to a
+fresh SerpAPI search rather than failing the request). Entries never
+expire — delete `~/.anz-agent/cache.db` (SQLite) or the `searches` table
+(Postgres) to clear the cache manually.
 
 ## Models
 
