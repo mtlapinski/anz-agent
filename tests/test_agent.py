@@ -14,13 +14,55 @@ def test_run_tool_search_amazon():
         mock_search.return_value = {"products": []}
         result = run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5})
     assert json.loads(result) == {"products": []}
-    mock_search.assert_called_once_with(query="laptop", optimize_for="price", max_results=5)
+    mock_search.assert_called_once_with(query="laptop", optimize_for="price", max_results=5, trace_id=None)
+
+
+def test_run_tool_forwards_trace_id_to_search_amazon():
+    from agent import run_tool
+    with patch("agent.search_amazon") as mock_search, patch("agent._get_langfuse"):
+        mock_search.return_value = {"products": []}
+        run_tool("search_amazon", {"query": "laptop", "optimize_for": "price", "max_results": 5},
+                  trace_id="trace-123")
+    mock_search.assert_called_once_with(query="laptop", optimize_for="price", max_results=5, trace_id="trace-123")
 
 
 def test_run_tool_unknown_raises():
     from agent import run_tool
     with pytest.raises(ValueError, match="Unknown tool"):
         run_tool("nonexistent_tool", {})
+
+
+def test_strip_image_for_llm_removes_image_field():
+    from agent import strip_image_for_llm
+    products = [
+        {"title": "Laptop", "price": 999.0, "image": "https://example.com/thumb1.jpg"},
+        {"title": "Mouse", "price": 19.99, "image": "https://example.com/thumb2.jpg"},
+    ]
+    result = strip_image_for_llm(products)
+    assert result == [
+        {"title": "Laptop", "price": 999.0},
+        {"title": "Mouse", "price": 19.99},
+    ]
+
+
+def test_strip_image_for_llm_handles_missing_image_field():
+    from agent import strip_image_for_llm
+    products = [{"title": "Laptop", "price": 999.0}]
+    result = strip_image_for_llm(products)
+    assert result == [{"title": "Laptop", "price": 999.0}]
+
+
+def test_strip_image_for_llm_handles_empty_list():
+    from agent import strip_image_for_llm
+    assert strip_image_for_llm([]) == []
+
+
+def test_strip_image_for_llm_does_not_mutate_input():
+    from agent import strip_image_for_llm
+    original = {"title": "Laptop", "image": "https://example.com/thumb1.jpg"}
+    products = [original]
+    strip_image_for_llm(products)
+    assert original == {"title": "Laptop", "image": "https://example.com/thumb1.jpg"}
 
 
 @patch("agent._get_langfuse")

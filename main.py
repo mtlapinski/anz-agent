@@ -3,6 +3,7 @@ import sys
 import uuid
 from dotenv import load_dotenv
 from langgraph.types import Command
+import db
 from llm import ModelConfig, create_client
 from agent import EvalScore, _get_langfuse
 from graph import build_graph, GraphContext
@@ -103,6 +104,11 @@ def handle_model_command(args: str, current_config: ModelConfig, graph, thread_i
 
 def main() -> None:
     load_dotenv()
+
+    # Idempotent — safe to call on every process startup. Creates the
+    # sessions/searches tables when DATABASE_URL points at Postgres; a no-op
+    # otherwise (e.g. local SQLite-backed dev).
+    db.run_migrations_if_configured()
 
     model_config = select_model()
     check_credentials(model_config)

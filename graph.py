@@ -2,15 +2,16 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Annotated, Any, TypedDict
 import json
+import os
 
 import agent
 import llm
 from agent import SYSTEM_PROMPT, TOOLS
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.graph import END, StateGraph, START
 from langgraph.types import interrupt
 from llm import ModelConfig
-
 
 def add_to_history(existing: list, new: list) -> list:
     return existing + new
@@ -120,9 +121,15 @@ def tools_node(state: GraphState) -> dict:
     last_search_results = state.get("last_search_results")
     for tc in state["pending_tool_calls"]:
         result = agent.run_tool(tc["name"], tc["input"], trace_id=trace_id)
-        tool_results.append({"type": "tool_result", "tool_use_id": tc["id"], "content": result})
+        content = result
         if tc["name"] == "search_amazon":
             last_search_results = json.loads(result)
+            llm_view = {
+                **last_search_results,
+                "products": agent.strip_image_for_llm(last_search_results.get("products", [])),
+            }
+            content = json.dumps(llm_view)
+        tool_results.append({"type": "tool_result", "tool_use_id": tc["id"], "content": content})
     return {
         "history": [{"role": "user", "content": tool_results}],
         "pending_tool_calls": None,
@@ -178,4 +185,19 @@ def build_graph():
     builder.add_edge("tools", "agent")
     builder.add_edge("judge", "eval")
     builder.add_edge("eval", END)
-    return builder.compile(checkpointer=MemorySaver())
+    database_url = os.environ.get("DATABASE_URL")
+    if database_url:
+        # Kept open for the process lifetime — this app builds one graph at
+        # import time (see server.py/main.py) and reuses it for every request.
+        # Store the context manager on the compiled graph to keep the connection
+        # alive independently of other graph instances.
+        pg_context = PostgresSaver.from_conn_string(database_url)
+        checkpointer = pg_context.__enter__()
+        checkpointer.setup()
+    else:
+        pg_context = None
+        checkpointer = MemorySaver()
+    compiled = builder.compile(checkpointer=checkpointer)
+    # Keep the PostgresSaver context manager alive for this specific graph instance
+    compiled._pg_context = pg_context
+    return compiled

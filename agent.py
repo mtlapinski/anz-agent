@@ -3,9 +3,9 @@ import os
 import llm
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from langfuse import Langfuse
 from llm import ModelConfig
 from tools.amazon import search_amazon
+from tracing import get_langfuse as _get_langfuse
 
 SYSTEM_PROMPT = """You are a helpful Amazon shopping assistant. Your job is to help the user find the right product at the right price.
 
@@ -68,19 +68,6 @@ TOOLS = [
     }
 ]
 
-_langfuse: Langfuse | None = None
-
-
-def _get_langfuse() -> Langfuse:
-    global _langfuse
-    if _langfuse is None:
-        _langfuse = Langfuse(
-            public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
-            secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-            host=os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com"),
-        )
-    return _langfuse
-
 
 def run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None) -> str:
     if tool_name == "search_amazon":
@@ -95,7 +82,7 @@ def run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None) -> s
                 )
             except Exception:
                 span = None
-        result = search_amazon(**tool_input)
+        result = search_amazon(**tool_input, trace_id=trace_id)
         if span:
             try:
                 span.update(output=result)
@@ -104,6 +91,10 @@ def run_tool(tool_name: str, tool_input: dict, trace_id: str | None = None) -> s
                 pass
         return json.dumps(result)
     raise ValueError(f"Unknown tool: {tool_name}")
+
+
+def strip_image_for_llm(products: list[dict]) -> list[dict]:
+    return [{k: v for k, v in p.items() if k != "image"} for p in products]
 
 
 @dataclass

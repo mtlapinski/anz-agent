@@ -1,5 +1,5 @@
 .env
-.superpowers/
+.git
 __pycache__/
 *.pyc
 .pytest_cache/
@@ -9,3 +9,4 @@ dist/
 evals/
 web/node_modules/
 .worktrees/
+.superpowers/

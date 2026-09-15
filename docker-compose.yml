@@ -1,0 +1,64 @@
+# docker-compose.yml
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: anz
+      POSTGRES_PASSWORD: anz
+      POSTGRES_DB: anz_agent
+    ports:
+      - "5432:5432"  # exposed to localhost for scripts/migrate_cache_to_postgres.py
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U anz"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  judge:
+    build: .
+    env_file: .env
+    command: ["uvicorn", "judge_service:app", "--host", "0.0.0.0", "--port", "8001"]
+    restart: unless-stopped
+    # No ports: entry — reachable only from inside the Compose network,
+    # same trust level as postgres. See docs/superpowers/specs/
+    # 2026-08-08-cache-judge-agent-boundary-design.md for the auth backlog item.
+
+  app-1:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://anz:anz@postgres:5432/anz_agent
+      REPLICA_ID: app-1
+      CACHE_JUDGE_URL: http://judge:8001/match
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  app-2:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://anz:anz@postgres:5432/anz_agent
+      REPLICA_ID: app-2
+      CACHE_JUDGE_URL: http://judge:8001/match
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8000:80"
+    depends_on:
+      - app-1
+      - app-2
+    restart: unless-stopped
+
+volumes:
+  pgdata:
